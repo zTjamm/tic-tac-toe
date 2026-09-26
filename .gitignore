@@ -12,3 +12,6 @@ desktop.ini
 
 # Node (если появится)
 node_modules/
+
+# User data
+users.json
