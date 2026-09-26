@@ -491,6 +491,313 @@ class ChatSystem {
     }
 }
 
+class OnlineUsersManager {
+    constructor(socket, game) {
+        this.socket = socket;
+        this.game = game;
+        this.onlineUsers = new Set();
+        this.panel = document.getElementById('onlinePanel');
+        this.list = document.getElementById('onlineList');
+        this.count = document.getElementById('onlineCount');
+
+        this.init();
+    }
+
+    init() {
+        document.getElementById('toggleOnlinePanel').addEventListener('click', () => {
+            this.panel.classList.toggle('collapsed');
+            const btn = document.getElementById('toggleOnlinePanel');
+            btn.textContent = this.panel.classList.contains('collapsed') ? 'Развернуть' : 'Свернуть';
+        });
+
+        this.socket.on('onlineUsersUpdate', (data) => {
+            this.onlineUsers = new Set(data.online);
+            this.updateList();
+        });
+
+        this.socket.on('challengeReceived', (data) => {
+            this.showChallengeModal(data);
+        });
+
+        this.socket.on('challengeAccepted', (data) => {
+            document.getElementById('challengeModal').style.display = 'none';
+            this.game.onlineGame.roomId = data.roomId;
+            this.game.onlineGame.playerSymbol = data.symbol;
+            this.game.onlineGame.onlineMode = true;
+            this.game.onlineGame.showRoomId();
+            this.game.ticTacToe.statusDisplay.textContent = 'Игра началась!';
+            this.game.ticTacToe.statusDisplay.className = 'status';
+            this.game.ticTacToe.gameActive = true;
+        });
+
+        this.socket.on('challengeDeclined', (data) => {
+            alert(`${data.by} отклонил ваш вызов`);
+        });
+
+        if (this.game.authSystem?.user) {
+            this.setOnline(this.game.authSystem.user.username);
+        }
+    }
+
+    setOnline(username) {
+        this.socket.emit('userOnline', { username });
+    }
+
+    setOffline(username) {
+        this.socket.emit('userOffline', { username });
+    }
+
+    updateList() {
+        this.count.textContent = this.onlineUsers.size;
+
+        const currentUsername = this.game.authSystem?.user?.username;
+        const filteredUsers = Array.from(this.onlineUsers).filter(u => u !== currentUsername);
+
+        if (filteredUsers.length === 0) {
+            this.list.innerHTML = '<div style="padding: 15px; text-align: center; color: var(--text-muted);">Никого нет онлайн</div>';
+            return;
+        }
+
+        this.list.innerHTML = filteredUsers.map(username => `
+            <div class="online-item" data-username="${username}">
+                <span class="online-dot"></span>
+                <div class="online-info">
+                    <div class="online-name">${username}</div>
+                    <div class="online-rating">Рейтинг: ${this.game.authSystem?.user?.username === username ? this.game.authSystem.user.rating : '???'}</div>
+                </div>
+                <button class="btn-small challenge-btn" data-username="${username}">Вызвать</button>
+            </div>
+        `).join('');
+
+        this.list.querySelectorAll('.challenge-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const targetUsername = btn.dataset.username;
+                this.sendChallenge(targetUsername);
+            });
+        });
+    }
+
+    sendChallenge(targetUsername) {
+        if (!this.game.authSystem?.token) {
+            alert('Войдите в аккаунт, чтобы вызывать игроков');
+            return;
+        }
+
+        fetch('/api/challenge/send', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.game.authSystem.token}`
+            },
+            body: JSON.stringify({ targetUsername })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Вызов отправлен игроку ${targetUsername}`);
+            } else {
+                alert(data.error || 'Ошибка отправки вызова');
+            }
+        })
+        .catch(err => {
+            alert('Ошибка сети');
+        });
+    }
+
+    showChallengeModal(data) {
+        const modal = document.getElementById('challengeModal');
+        document.getElementById('challengeFrom').textContent = data.from;
+        modal.style.display = 'flex';
+
+        const acceptBtn = document.getElementById('challengeAcceptBtn');
+        const declineBtn = document.getElementById('challengeDeclineBtn');
+
+        acceptBtn.onclick = () => {
+            fetch('/api/challenge/accept', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.game.authSystem.token}`
+                },
+                body: JSON.stringify({ challengeId: data.challengeId })
+            })
+            .then(res => res.json())
+            .then(result => {
+                if (!result.success) {
+                    alert(result.error || 'Ошибка');
+                }
+            });
+        };
+
+        declineBtn.onclick = () => {
+            fetch('/api/challenge/decline', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.game.authSystem.token}`
+                },
+                body: JSON.stringify({ challengeId: data.challengeId })
+            });
+            modal.style.display = 'none';
+        };
+    }
+}
+
+class FriendsManager {
+    constructor(game) {
+        this.game = game;
+        this.modal = document.getElementById('friendsModal');
+        this.list = document.getElementById('friendsList');
+        this.searchInput = document.getElementById('friendSearch');
+
+        this.init();
+    }
+
+    init() {
+        document.getElementById('friendsClose').addEventListener('click', () => {
+            this.modal.style.display = 'none';
+        });
+
+        this.searchInput.addEventListener('input', (e) => {
+            this.searchUser(e.target.value);
+        });
+
+        const friendsBtn = document.createElement('button');
+        friendsBtn.className = 'btn';
+        friendsBtn.textContent = 'Друзья';
+        friendsBtn.style.marginTop = '10px';
+        friendsBtn.addEventListener('click', () => this.showFriends());
+        document.querySelector('.controls').appendChild(friendsBtn);
+    }
+
+    showFriends() {
+        this.modal.style.display = 'flex';
+        this.loadFriends();
+    }
+
+    loadFriends() {
+        if (!this.game.authSystem?.token) {
+            this.list.innerHTML = '<p style="text-align: center; color: var(--text-muted);">Войдите в аккаунт</p>';
+            return;
+        }
+
+        fetch('/api/friends', {
+            headers: { 'Authorization': `Bearer ${this.game.authSystem.token}` }
+        })
+        .then(res => res.json())
+        .then(friends => {
+            if (friends.length === 0) {
+                this.list.innerHTML = '<p style="text-align: center; color: var(--text-muted);">У вас пока нет друзей</p>';
+                return;
+            }
+
+            this.list.innerHTML = friends.map(friend => `
+                <div class="friend-item">
+                    <div class="friend-info">
+                        <div class="friend-name">${friend.username}</div>
+                        <div class="friend-status ${friend.online ? 'online' : ''}">${friend.online ? 'В сети' : 'Не в сети'}</div>
+                    </div>
+                    <div class="friend-actions">
+                        ${friend.online ? `<button class="btn-small challenge-btn" data-username="${friend.username}">Вызвать</button>` : ''}
+                        <button class="btn-small remove-friend-btn" data-username="${friend.username}">Удалить</button>
+                    </div>
+                </div>
+            `).join('');
+
+            this.list.querySelectorAll('.challenge-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.game.onlineUsersManager.sendChallenge(btn.dataset.username);
+                });
+            });
+
+            this.list.querySelectorAll('.remove-friend-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.removeFriend(btn.dataset.username);
+                });
+            });
+        });
+    }
+
+    searchUser(query) {
+        if (!query || query.length < 2) return;
+
+        const onlineUsers = Array.from(this.game.onlineUsersManager.onlineUsers);
+        const filtered = onlineUsers.filter(u => u.toLowerCase().includes(query.toLowerCase()));
+
+        if (filtered.length > 0) {
+            const existing = this.list.querySelector('.search-results');
+            if (existing) existing.remove();
+
+            const div = document.createElement('div');
+            div.className = 'search-results';
+            div.innerHTML = filtered.map(username => `
+                <div class="friend-item">
+                    <div class="friend-info">
+                        <div class="friend-name">${username}</div>
+                        <div class="friend-status online">В сети</div>
+                    </div>
+                    <div class="friend-actions">
+                        <button class="btn-small add-friend-btn" data-username="${username}">Добавить</button>
+                    </div>
+                </div>
+            `).join('');
+
+            this.list.insertBefore(div, this.list.firstChild);
+
+            div.querySelectorAll('.add-friend-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    this.addFriend(btn.dataset.username);
+                });
+            });
+        }
+    }
+
+    addFriend(username) {
+        if (!this.game.authSystem?.token) {
+            alert('Войдите в аккаунт');
+            return;
+        }
+
+        fetch('/api/friends/add', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.game.authSystem.token}`
+            },
+            body: JSON.stringify({ friendUsername: username })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert(`${username} добавлен в друзья`);
+                this.loadFriends();
+            } else {
+                alert(data.error || 'Ошибка');
+            }
+        });
+    }
+
+    removeFriend(username) {
+        if (!this.game.authSystem?.token) return;
+
+        fetch('/api/friends/remove', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.game.authSystem.token}`
+            },
+            body: JSON.stringify({ friendUsername: username })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                this.loadFriends();
+            }
+        });
+    }
+}
+
 class AuthSystem {
     constructor(game) {
         this.game = game;
@@ -703,6 +1010,8 @@ document.addEventListener('DOMContentLoaded', () => {
     game.ratingSystem = new RatingSystem();
     game.chatSystem = new ChatSystem(game.onlineGame.socket, game);
     game.authSystem = new AuthSystem(game);
+    game.onlineUsersManager = new OnlineUsersManager(game.onlineGame.socket, game);
+    game.friendsManager = new FriendsManager(game);
 
     // Theme toggle
     const themeBtn = document.getElementById('themeToggleBtn');

@@ -15,6 +15,9 @@ app.use(express.json());
 const USERS_FILE = path.join(__dirname, 'users.json');
 const users = new Map();
 const sessions = new Map();
+const onlineUsers = new Map();
+const friends = new Map();
+const pendingChallenges = new Map();
 
 function loadUsers() {
     try {
@@ -22,6 +25,9 @@ function loadUsers() {
             const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
             for (const [username, userData] of Object.entries(data)) {
                 users.set(username, userData);
+                if (userData.friends) {
+                    friends.set(username, new Set(userData.friends));
+                }
             }
         }
     } catch (e) {
@@ -31,7 +37,13 @@ function loadUsers() {
 
 function saveUsers() {
     try {
-        const data = Object.fromEntries(users);
+        const data = {};
+        for (const [username, userData] of users) {
+            data[username] = {
+                ...userData,
+                friends: friends.has(username) ? Array.from(friends.get(username)) : []
+            };
+        }
         fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
     } catch (e) {
         console.error('Ошибка сохранения пользователей:', e);
@@ -83,7 +95,25 @@ app.post('/api/register', (req, res) => {
     users.set(username, userData);
     saveUsers();
 
-    res.json({ success: true, message: 'Регистрация успешна' });
+    const token = generateToken();
+    sessions.set(token, {
+        username,
+        socketId: null
+    });
+
+    res.json({
+        success: true,
+        token,
+        user: {
+            username: userData.username,
+            rating: userData.rating,
+            wins: userData.wins,
+            losses: userData.losses,
+            draws: userData.draws,
+            streak: userData.streak,
+            maxStreak: userData.maxStreak
+        }
+    });
 });
 
 app.post('/api/login', (req, res) => {
@@ -161,6 +191,183 @@ app.get('/api/leaderboard', (req, res) => {
     res.json(leaderboard);
 });
 
+app.get('/api/online', (req, res) => {
+    const onlineList = Array.from(onlineUsers.values()).map(u => ({
+        username: u.username,
+        rating: u.rating
+    }));
+    res.json(onlineList);
+});
+
+app.get('/api/friends', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const session = sessions.get(token);
+
+    if (!session) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+
+    const userFriends = friends.get(session.username) || new Set();
+    const friendsList = Array.from(userFriends).map(username => {
+        const user = users.get(username);
+        return {
+            username,
+            rating: user?.rating || 1000,
+            online: onlineUsers.has(username)
+        };
+    });
+
+    res.json(friendsList);
+});
+
+app.post('/api/friends/add', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const session = sessions.get(token);
+    const { friendUsername } = req.body;
+
+    if (!session) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+
+    if (!users.has(friendUsername)) {
+        return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    if (session.username === friendUsername) {
+        return res.status(400).json({ error: 'Нельзя добавить себя в друзья' });
+    }
+
+    if (!friends.has(session.username)) {
+        friends.set(session.username, new Set());
+    }
+
+    friends.get(session.username).add(friendUsername);
+
+    if (!friends.has(friendUsername)) {
+        friends.set(friendUsername, new Set());
+    }
+    friends.get(friendUsername).add(session.username);
+
+    saveUsers();
+
+    res.json({ success: true, message: 'Друг добавлен' });
+});
+
+app.post('/api/friends/remove', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const session = sessions.get(token);
+    const { friendUsername } = req.body;
+
+    if (!session) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+
+    if (friends.has(session.username)) {
+        friends.get(session.username).delete(friendUsername);
+    }
+    if (friends.has(friendUsername)) {
+        friends.get(friendUsername).delete(session.username);
+    }
+
+    saveUsers();
+
+    res.json({ success: true, message: 'Друг удалён' });
+});
+
+app.post('/api/challenge/send', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const session = sessions.get(token);
+    const { targetUsername } = req.body;
+
+    if (!session) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+
+    if (!onlineUsers.has(targetUsername)) {
+        return res.status(400).json({ error: 'Пользователь не в сети' });
+    }
+
+    const challengeId = generateToken();
+    pendingChallenges.set(challengeId, {
+        from: session.username,
+        to: targetUsername,
+        createdAt: Date.now()
+    });
+
+    const targetSocket = onlineUsers.get(targetUsername)?.socketId;
+    if (targetSocket) {
+        io.to(targetSocket).emit('challengeReceived', {
+            challengeId,
+            from: session.username
+        });
+    }
+
+    res.json({ success: true, challengeId });
+});
+
+app.post('/api/challenge/accept', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const session = sessions.get(token);
+    const { challengeId } = req.body;
+
+    if (!session) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+
+    const challenge = pendingChallenges.get(challengeId);
+    if (!challenge || challenge.to !== session.username) {
+        return res.status(400).json({ error: 'Вызов не найден' });
+    }
+
+    pendingChallenges.delete(challengeId);
+
+    const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const room = createRoom(roomId);
+    room.players.push(
+        { id: onlineUsers.get(challenge.from)?.socketId, symbol: 'X', username: challenge.from },
+        { id: onlineUsers.get(challenge.to)?.socketId, symbol: 'O', username: session.username }
+    );
+    rooms.set(roomId, room);
+
+    const fromSocket = onlineUsers.get(challenge.from)?.socketId;
+    const toSocket = onlineUsers.get(challenge.to)?.socketId;
+
+    if (fromSocket) {
+        io.sockets.sockets.get(fromSocket)?.join(roomId);
+        io.to(fromSocket).emit('challengeAccepted', { roomId, symbol: 'X', opponent: session.username });
+    }
+    if (toSocket) {
+        io.sockets.sockets.get(toSocket)?.join(roomId);
+        io.to(toSocket).emit('challengeAccepted', { roomId, symbol: 'O', opponent: challenge.from });
+    }
+
+    res.json({ success: true, roomId });
+});
+
+app.post('/api/challenge/decline', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const session = sessions.get(token);
+    const { challengeId } = req.body;
+
+    if (!session) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+
+    const challenge = pendingChallenges.get(challengeId);
+    if (!challenge || challenge.to !== session.username) {
+        return res.status(400).json({ error: 'Вызов не найден' });
+    }
+
+    pendingChallenges.delete(challengeId);
+
+    const fromSocket = onlineUsers.get(challenge.from)?.socketId;
+    if (fromSocket) {
+        io.to(fromSocket).emit('challengeDeclined', { by: session.username });
+    }
+
+    res.json({ success: true });
+});
+
 const rooms = new Map();
 
 function updatePlayerStats(username, result) {
@@ -229,6 +436,36 @@ function getWinPattern(board, player, winPatterns) {
 
 io.on('connection', (socket) => {
     console.log(`Подключился: ${socket.id}`);
+
+    socket.on('userOnline', (data) => {
+        const { username } = data;
+        if (username && users.has(username)) {
+            const user = users.get(username);
+            onlineUsers.set(username, {
+                username,
+                socketId: socket.id,
+                rating: user.rating
+            });
+            sessions.forEach((session, token) => {
+                if (session.username === username) {
+                    session.socketId = socket.id;
+                }
+            });
+            io.emit('onlineUsersUpdate', {
+                online: Array.from(onlineUsers.keys())
+            });
+        }
+    });
+
+    socket.on('userOffline', (data) => {
+        const { username } = data;
+        if (username && onlineUsers.has(username)) {
+            onlineUsers.delete(username);
+            io.emit('onlineUsersUpdate', {
+                online: Array.from(onlineUsers.keys())
+            });
+        }
+    });
 
     socket.on('createRoom', (data, callback) => {
         const { username } = data || {};
@@ -380,6 +617,16 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log(`Отключился: ${socket.id}`);
+
+        for (const [username, data] of onlineUsers.entries()) {
+            if (data.socketId === socket.id) {
+                onlineUsers.delete(username);
+                io.emit('onlineUsersUpdate', {
+                    online: Array.from(onlineUsers.keys())
+                });
+                break;
+            }
+        }
 
         for (const [roomId, room] of rooms.entries()) {
             const playerIndex = room.players.findIndex(p => p.id === socket.id);

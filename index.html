@@ -113,6 +113,36 @@
         </div>
     </div>
 
+    <div class="friends-modal" id="friendsModal" style="display: none;">
+        <div class="friends-container">
+            <h2>Друзья</h2>
+            <div class="friends-search">
+                <input type="text" id="friendSearch" placeholder="Найти пользователя...">
+            </div>
+            <div class="friends-list" id="friendsList"></div>
+            <button class="btn" id="friendsClose">Закрыть</button>
+        </div>
+    </div>
+
+    <div class="challenge-modal" id="challengeModal" style="display: none;">
+        <div class="challenge-container">
+            <h2>Вызов на игру</h2>
+            <p>Игрок <strong id="challengeFrom"></strong> вызывает вас!</p>
+            <div class="challenge-buttons">
+                <button class="btn btn-success" id="challengeAcceptBtn">Принять</button>
+                <button class="btn btn-danger" id="challengeDeclineBtn">Отклонить</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="online-panel" id="onlinePanel">
+        <div class="online-header">
+            <span>Онлайн: <strong id="onlineCount">0</strong></span>
+            <button class="btn-small" id="toggleOnlinePanel">Свернуть</button>
+        </div>
+        <div class="online-list" id="onlineList"></div>
+    </div>
+
     <script src="/socket.io/socket.io.js"></script>
     <script src="script.js"></script>
 </body>
