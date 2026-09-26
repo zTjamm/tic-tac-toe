@@ -115,7 +115,8 @@ class TicTacToe {
 
     updateStatus() {
         if (!this.gameActive) return;
-        this.statusDisplay.textContent = `Ход игрока ${this.currentPlayer}`;
+        const playerName = this.currentPlayer === 'X' ? 'X' : 'O';
+        this.statusDisplay.textContent = `Ход игрока ${this.currentPlayer} (${playerName})`;
         this.statusDisplay.className = `status ${this.currentPlayer.toLowerCase()}-turn`;
     }
 
@@ -253,6 +254,13 @@ class OnlineGame {
                 cell.className = 'cell';
             });
             this.updateBoard(data.board);
+
+            if (data.players && data.players.length >= 2) {
+                const names = data.players;
+                this.playerName = names.find(n => n === this.playerSymbol || n === this.ticTacToe.authSystem?.user?.username) || this.playerSymbol;
+                this.opponentName = names.find(n => n !== this.playerName) || (this.playerSymbol === 'X' ? 'O' : 'X');
+            }
+
             this.updateStatusForOnline();
         });
 
@@ -343,9 +351,14 @@ class OnlineGame {
     updateStatusForOnline() {
         this.isMyTurn = this.ticTacToe.currentPlayer === this.playerSymbol;
         const symbol = this.ticTacToe.currentPlayer;
-        this.ticTacToe.statusDisplay.textContent = this.isMyTurn
-            ? `Ваш ход (${this.playerSymbol})`
-            : `Ход противника (${symbol})`;
+        const playerName = this.playerName || this.playerSymbol;
+        const opponentName = this.opponentName || (this.currentPlayer === 'X' ? 'X' : 'O');
+
+        if (this.isMyTurn) {
+            this.ticTacToe.statusDisplay.textContent = `Ваш ход (${playerName})`;
+        } else {
+            this.ticTacToe.statusDisplay.textContent = `Ход противника (${opponentName})`;
+        }
         this.ticTacToe.statusDisplay.className = `status ${symbol.toLowerCase()}-turn`;
     }
 
@@ -918,6 +931,9 @@ class AuthSystem {
     }
 
     updateUI() {
+        const profileBtn = document.getElementById('profileBtn');
+        const logoutBtn = document.getElementById('logoutBtn');
+
         if (this.user) {
             this.modal.style.display = 'none';
             this.userPanel.style.display = 'flex';
@@ -928,12 +944,16 @@ class AuthSystem {
                 <span>Поражений: ${this.user.losses}</span>
                 <span>Ничьих: ${this.user.draws}</span>
             `;
+            if (profileBtn) profileBtn.style.display = 'flex';
+            if (logoutBtn) logoutBtn.style.display = 'flex';
             if (this.game.onlineUsersManager) {
                 this.game.onlineUsersManager.setOnline(this.user.username);
             }
         } else {
             this.modal.style.display = 'flex';
             this.userPanel.style.display = 'none';
+            if (profileBtn) profileBtn.style.display = 'none';
+            if (logoutBtn) logoutBtn.style.display = 'none';
         }
     }
 
