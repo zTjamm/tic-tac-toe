@@ -1,0 +1,14 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Node (если появится)
+node_modules/

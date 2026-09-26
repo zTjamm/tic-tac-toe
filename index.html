@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Крестики-нолики</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Крестики-нолики</h1>
+
+        <div class="scoreboard">
+            <div class="score x-score">
+                <span class="label">Игрок X</span>
+                <span class="value" id="scoreX">0</span>
+            </div>
+            <div class="score draw-score">
+                <span class="label">Ничьи</span>
+                <span class="value" id="scoreDraw">0</span>
+            </div>
+            <div class="score o-score">
+                <span class="label">Игрок O</span>
+                <span class="value" id="scoreO">0</span>
+            </div>
+        </div>
+
+        <div class="status" id="status">Ход игрока X</div>
+
+        <div class="board" id="board">
+            <div class="cell" data-index="0"></div>
+            <div class="cell" data-index="1"></div>
+            <div class="cell" data-index="2"></div>
+            <div class="cell" data-index="3"></div>
+            <div class="cell" data-index="4"></div>
+            <div class="cell" data-index="5"></div>
+            <div class="cell" data-index="6"></div>
+            <div class="cell" data-index="7"></div>
+            <div class="cell" data-index="8"></div>
+        </div>
+
+        <div class="controls">
+            <button class="btn" id="resetBtn">Новая игра</button>
+            <button class="btn" id="resetScoreBtn">Сбросить счёт</button>
+        </div>
+
+        <div class="mode-toggle">
+            <span class="mode-label">Режим:</span>
+            <button class="btn-mode active" data-mode="pvp">2 игрока</button>
+            <button class="btn-mode" data-mode="bot">Против бота</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
