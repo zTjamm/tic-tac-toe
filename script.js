@@ -289,7 +289,8 @@ class OnlineGame {
     }
 
     createRoom() {
-        this.socket.emit('createRoom', (response) => {
+        const username = this.ticTacToe.authSystem?.user?.username || 'X';
+        this.socket.emit('createRoom', { username }, (response) => {
             if (response.success) {
                 this.roomId = response.roomId;
                 this.playerSymbol = response.symbol;
@@ -303,7 +304,8 @@ class OnlineGame {
     }
 
     joinRoom(roomId) {
-        this.socket.emit('joinRoom', roomId, (response) => {
+        const username = this.ticTacToe.authSystem?.user?.username || 'O';
+        this.socket.emit('joinRoom', roomId, { username }, (response) => {
             if (response.success) {
                 this.roomId = response.roomId;
                 this.playerSymbol = response.symbol;
@@ -351,13 +353,16 @@ class OnlineGame {
         const roomDiv = document.getElementById('roomIdDisplay');
         if (roomDiv) roomDiv.remove();
 
+        const inviteLink = `${window.location.origin}?room=${this.roomId}`;
+
         const div = document.createElement('div');
         div.id = 'roomIdDisplay';
         div.className = 'room-display';
         div.innerHTML = `
             <p>ID комнаты: <strong>${this.roomId}</strong></p>
             <p class="hint">Отправьте этот код другу</p>
-            <button class="btn-small" onclick="navigator.clipboard.writeText('${this.roomId}')">Копировать</button>
+            <button class="btn-small" onclick="navigator.clipboard.writeText('${this.roomId}')">Копировать ID</button>
+            <button class="btn-small" onclick="navigator.clipboard.writeText('${inviteLink}')">Копировать ссылку</button>
         `;
         document.querySelector('.container').insertBefore(div, document.querySelector('.scoreboard'));
     }
@@ -486,6 +491,210 @@ class ChatSystem {
     }
 }
 
+class AuthSystem {
+    constructor(game) {
+        this.game = game;
+        this.token = localStorage.getItem('ticTacToeToken');
+        this.user = null;
+        this.modal = document.getElementById('authModal');
+        this.form = document.getElementById('authForm');
+        this.errorDiv = document.getElementById('authError');
+        this.userPanel = document.getElementById('userPanel');
+
+        this.init();
+    }
+
+    init() {
+        const tabs = document.querySelectorAll('.auth-tab');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
+        });
+
+        this.form.addEventListener('submit', (e) => this.handleSubmit(e));
+        document.getElementById('authClose').addEventListener('click', () => this.closeModal());
+        document.getElementById('logoutBtn').addEventListener('click', () => this.logout());
+        document.getElementById('profileBtn').addEventListener('click', () => this.showProfile());
+        document.getElementById('profileClose').addEventListener('click', () => this.hideProfile());
+        document.getElementById('leaderboardClose').addEventListener('click', () => this.hideLeaderboard());
+
+        if (this.token) {
+            this.loadProfile();
+        }
+
+        const leaderboardBtn = document.createElement('button');
+        leaderboardBtn.className = 'btn';
+        leaderboardBtn.textContent = 'Таблица лидеров';
+        leaderboardBtn.style.marginTop = '10px';
+        leaderboardBtn.addEventListener('click', () => this.showLeaderboard());
+        document.querySelector('.controls').appendChild(leaderboardBtn);
+    }
+
+    switchTab(tab) {
+        document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+        document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+        document.getElementById('authTitle').textContent = tab === 'login' ? 'Вход' : 'Регистрация';
+        document.getElementById('authSubmit').textContent = tab === 'login' ? 'Войти' : 'Зарегистрироваться';
+        this.errorDiv.textContent = '';
+    }
+
+    async handleSubmit(e) {
+        e.preventDefault();
+        const username = document.getElementById('username').value.trim();
+        const password = document.getElementById('password').value;
+        const isLogin = document.querySelector('.auth-tab.active').dataset.tab === 'login';
+
+        try {
+            const response = await fetch(isLogin ? '/api/login' : '/api/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                this.errorDiv.textContent = data.error || 'Ошибка';
+                return;
+            }
+
+            if (data.token) {
+                this.token = data.token;
+                this.user = data.user;
+                localStorage.setItem('ticTacToeToken', this.token);
+                this.closeModal();
+                this.updateUI();
+            } else {
+                this.errorDiv.textContent = data.message || 'Регистрация успешна! Теперь войдите.';
+            }
+        } catch (err) {
+            this.errorDiv.textContent = 'Ошибка сети';
+        }
+    }
+
+    async loadProfile() {
+        try {
+            const response = await fetch('/api/profile', {
+                headers: { 'Authorization': `Bearer ${this.token}` }
+            });
+
+            if (!response.ok) {
+                this.logout();
+                return;
+            }
+
+            this.user = await response.json();
+            this.updateUI();
+        } catch (err) {
+            console.error('Ошибка загрузки профиля:', err);
+        }
+    }
+
+    logout() {
+        this.token = null;
+        this.user = null;
+        localStorage.removeItem('ticTacToeToken');
+        this.updateUI();
+    }
+
+    updateUI() {
+        if (this.user) {
+            this.modal.style.display = 'none';
+            this.userPanel.style.display = 'flex';
+            document.getElementById('userName').textContent = this.user.username;
+            document.getElementById('userRating').textContent = `Рейтинг: ${this.user.rating}`;
+            document.getElementById('userStats').innerHTML = `
+                <span>Побед: ${this.user.wins}</span>
+                <span>Поражений: ${this.user.losses}</span>
+                <span>Ничьих: ${this.user.draws}</span>
+            `;
+        } else {
+            this.modal.style.display = 'flex';
+            this.userPanel.style.display = 'none';
+        }
+    }
+
+    closeModal() {
+        this.modal.style.display = 'none';
+    }
+
+    showProfile() {
+        const modal = document.getElementById('profileModal');
+        modal.style.display = 'flex';
+
+        const stats = document.getElementById('profileStats');
+        stats.innerHTML = `
+            <div class="profile-stat">
+                <div class="stat-value">${this.user.rating}</div>
+                <div class="stat-label">Рейтинг</div>
+            </div>
+            <div class="profile-stat">
+                <div class="stat-value">${this.user.wins}</div>
+                <div class="stat-label">Победы</div>
+            </div>
+            <div class="profile-stat">
+                <div class="stat-value">${this.user.losses}</div>
+                <div class="stat-label">Поражения</div>
+            </div>
+            <div class="profile-stat">
+                <div class="stat-value">${this.user.draws}</div>
+                <div class="stat-label">Ничьи</div>
+            </div>
+            <div class="profile-stat">
+                <div class="stat-value">${this.user.streak}</div>
+                <div class="stat-label">Серия побед</div>
+            </div>
+            <div class="profile-stat">
+                <div class="stat-value">${this.user.maxStreak}</div>
+                <div class="stat-label">Макс. серия</div>
+            </div>
+        `;
+
+        const history = document.getElementById('profileHistory');
+        if (this.user.history && this.user.history.length > 0) {
+            history.innerHTML = '<h3>История игр</h3>' + this.user.history.map(h => `
+                <div class="history-item">
+                    <span class="history-result ${h.result}">${h.result === 'win' ? 'Победа' : h.result === 'loss' ? 'Поражение' : 'Ничья'}</span>
+                    <span class="history-date">${new Date(h.date).toLocaleDateString('ru-RU')}</span>
+                </div>
+            `).join('');
+        } else {
+            history.innerHTML = '<p style="text-align: center; color: var(--text-muted);">История пуста</p>';
+        }
+    }
+
+    hideProfile() {
+        document.getElementById('profileModal').style.display = 'none';
+    }
+
+    async showLeaderboard() {
+        const modal = document.getElementById('leaderboardModal');
+        modal.style.display = 'flex';
+
+        try {
+            const response = await fetch('/api/leaderboard');
+            const leaderboard = await response.json();
+
+            const list = document.getElementById('leaderboardList');
+            list.innerHTML = leaderboard.map((player, index) => `
+                <div class="leaderboard-item ${player.username === this.user?.username ? 'current-user' : ''}">
+                    <span class="leaderboard-rank">${index + 1}</span>
+                    <div class="leaderboard-info">
+                        <div class="leaderboard-name">${player.username}</div>
+                        <div class="leaderboard-stats">${player.wins}В / ${player.losses}П / ${player.draws}Н</div>
+                    </div>
+                    <span class="leaderboard-rating">${player.rating}</span>
+                </div>
+            `).join('');
+        } catch (err) {
+            console.error('Ошибка загрузки таблицы лидеров:', err);
+        }
+    }
+
+    hideLeaderboard() {
+        document.getElementById('leaderboardModal').style.display = 'none';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const game = new TicTacToe();
     game.onlineGame = new OnlineGame(game);
@@ -493,6 +702,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     game.ratingSystem = new RatingSystem();
     game.chatSystem = new ChatSystem(game.onlineGame.socket, game);
+    game.authSystem = new AuthSystem(game);
 
     // Theme toggle
     const themeBtn = document.getElementById('themeToggleBtn');

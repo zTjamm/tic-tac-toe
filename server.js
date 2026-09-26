@@ -2,14 +2,196 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const crypto = require('crypto');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.static(__dirname));
+app.use(express.json());
+
+const USERS_FILE = path.join(__dirname, 'users.json');
+const users = new Map();
+const sessions = new Map();
+
+function loadUsers() {
+    try {
+        if (fs.existsSync(USERS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+            for (const [username, userData] of Object.entries(data)) {
+                users.set(username, userData);
+            }
+        }
+    } catch (e) {
+        console.error('Ошибка загрузки пользователей:', e);
+    }
+}
+
+function saveUsers() {
+    try {
+        const data = Object.fromEntries(users);
+        fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
+    } catch (e) {
+        console.error('Ошибка сохранения пользователей:', e);
+    }
+}
+
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+function generateToken() {
+    return crypto.randomBytes(32).toString('hex');
+}
+
+loadUsers();
+
+app.post('/api/register', (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Логин и пароль обязательны' });
+    }
+
+    if (username.length < 3 || username.length > 20) {
+        return res.status(400).json({ error: 'Логин от 3 до 20 символов' });
+    }
+
+    if (password.length < 4) {
+        return res.status(400).json({ error: 'Пароль минимум 4 символа' });
+    }
+
+    if (users.has(username)) {
+        return res.status(409).json({ error: 'Пользователь уже существует' });
+    }
+
+    const userData = {
+        username,
+        password: hashPassword(password),
+        rating: 1000,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        streak: 0,
+        maxStreak: 0,
+        history: [],
+        createdAt: new Date().toISOString()
+    };
+
+    users.set(username, userData);
+    saveUsers();
+
+    res.json({ success: true, message: 'Регистрация успешна' });
+});
+
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Логин и пароль обязательны' });
+    }
+
+    const user = users.get(username);
+    if (!user || user.password !== hashPassword(password)) {
+        return res.status(401).json({ error: 'Неверный логин или пароль' });
+    }
+
+    const token = generateToken();
+    sessions.set(token, {
+        username,
+        socketId: null
+    });
+
+    res.json({
+        success: true,
+        token,
+        user: {
+            username: user.username,
+            rating: user.rating,
+            wins: user.wins,
+            losses: user.losses,
+            draws: user.draws,
+            streak: user.streak,
+            maxStreak: user.maxStreak
+        }
+    });
+});
+
+app.get('/api/profile', (req, res) => {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    const session = sessions.get(token);
+
+    if (!session) {
+        return res.status(401).json({ error: 'Не авторизован' });
+    }
+
+    const user = users.get(session.username);
+    if (!user) {
+        return res.status(401).json({ error: 'Пользователь не найден' });
+    }
+
+    res.json({
+        username: user.username,
+        rating: user.rating,
+        wins: user.wins,
+        losses: user.losses,
+        draws: user.draws,
+        streak: user.streak,
+        maxStreak: user.maxStreak,
+        history: user.history.slice(-10)
+    });
+});
+
+app.get('/api/leaderboard', (req, res) => {
+    const leaderboard = Array.from(users.values())
+        .map(u => ({
+            username: u.username,
+            rating: u.rating,
+            wins: u.wins,
+            losses: u.losses,
+            draws: u.draws,
+            streak: u.streak,
+            maxStreak: u.maxStreak
+        }))
+        .sort((a, b) => b.rating - a.rating)
+        .slice(0, 10);
+
+    res.json(leaderboard);
+});
 
 const rooms = new Map();
+
+function updatePlayerStats(username, result) {
+    const user = users.get(username);
+    if (!user) return;
+
+    if (result === 'win') {
+        user.wins++;
+        user.streak++;
+        user.maxStreak = Math.max(user.maxStreak, user.streak);
+        user.rating += user.streak >= 4 ? 3 : 2;
+    } else if (result === 'loss') {
+        user.losses++;
+        user.streak = 0;
+        user.rating = Math.max(0, user.rating - 1);
+    } else {
+        user.draws++;
+        user.streak = 0;
+    }
+
+    user.history.push({
+        result,
+        date: new Date().toISOString()
+    });
+
+    if (user.history.length > 50) {
+        user.history = user.history.slice(-50);
+    }
+
+    saveUsers();
+}
 
 function createRoom(roomId) {
     return {
@@ -48,17 +230,19 @@ function getWinPattern(board, player, winPatterns) {
 io.on('connection', (socket) => {
     console.log(`Подключился: ${socket.id}`);
 
-    socket.on('createRoom', (callback) => {
+    socket.on('createRoom', (data, callback) => {
+        const { username } = data || {};
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
         const room = createRoom(roomId);
-        room.players.push({ id: socket.id, symbol: 'X' });
+        room.players.push({ id: socket.id, symbol: 'X', username: username || 'X' });
         rooms.set(roomId, room);
         socket.join(roomId);
-        callback({ success: true, roomId, symbol: 'X' });
-        console.log(`Комната создана: ${roomId}`);
+        callback({ success: true, roomId, symbol: 'X', username: username || 'X' });
+        console.log(`Комната создана: ${roomId} пользователем ${username || 'X'}`);
     });
 
-    socket.on('joinRoom', (roomId, callback) => {
+    socket.on('joinRoom', (roomId, data, callback) => {
+        const { username } = data || {};
         const room = rooms.get(roomId);
 
         if (!room) {
@@ -71,17 +255,17 @@ io.on('connection', (socket) => {
             return;
         }
 
-        room.players.push({ id: socket.id, symbol: 'O' });
+        room.players.push({ id: socket.id, symbol: 'O', username: username || 'O' });
         socket.join(roomId);
-        callback({ success: true, roomId, symbol: 'O' });
+        callback({ success: true, roomId, symbol: 'O', username: username || 'O' });
 
         io.to(roomId).emit('gameStart', {
             board: room.board,
             currentPlayer: room.currentPlayer,
-            players: room.players.map(p => p.symbol)
+            players: room.players.map(p => p.username || p.symbol)
         });
 
-        console.log(`Игрок присоединился к ${roomId}`);
+        console.log(`Игрок ${username || 'O'} присоединился к ${roomId}`);
     });
 
     socket.on('makeMove', (data) => {
@@ -101,12 +285,28 @@ io.on('connection', (socket) => {
         if (winPattern) {
             room.gameActive = false;
             room.scores[room.currentPlayer]++;
+
+            const players = room.players.map(p => ({
+                id: p.id,
+                symbol: p.symbol,
+                username: p.username || p.symbol
+            }));
+
+            const winnerPlayer = players.find(p => p.symbol === room.currentPlayer);
+            const loserPlayer = players.find(p => p.symbol !== room.currentPlayer);
+
+            if (winnerPlayer && loserPlayer) {
+                updatePlayerStats(winnerPlayer.username, 'win');
+                updatePlayerStats(loserPlayer.username, 'loss');
+            }
+
             io.to(roomId).emit('gameUpdate', {
                 board: room.board,
                 currentPlayer: room.currentPlayer,
                 winPattern,
                 winner: room.currentPlayer,
-                scores: room.scores
+                scores: room.scores,
+                players: players
             });
             return;
         }
@@ -114,12 +314,22 @@ io.on('connection', (socket) => {
         if (room.board.every(c => c !== '')) {
             room.gameActive = false;
             room.scores.Draw++;
+
+            const players = room.players.map(p => ({
+                id: p.id,
+                symbol: p.symbol,
+                username: p.username || p.symbol
+            }));
+
+            players.forEach(p => updatePlayerStats(p.username, 'draw'));
+
             io.to(roomId).emit('gameUpdate', {
                 board: room.board,
                 currentPlayer: null,
                 winPattern: null,
                 winner: 'draw',
-                scores: room.scores
+                scores: room.scores,
+                players: players
             });
             return;
         }
@@ -161,7 +371,7 @@ io.on('connection', (socket) => {
         if (!player) return;
 
         io.to(roomId).emit('chatMessage', {
-            sender: player.symbol,
+            sender: player.username || player.symbol,
             text: text,
             isOwn: false,
             socketId: socket.id
