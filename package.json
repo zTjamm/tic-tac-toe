@@ -1,0 +1,17 @@
+{
+  "name": "tic-tac-toe-online",
+  "version": "1.0.0",
+  "description": "Игра крестики-нолики онлайн с мультиплеером",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["tic-tac-toe", "multiplayer", "websocket"],
+  "author": "zTjamm",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  }
+}

@@ -227,6 +227,369 @@ class TicTacToe {
     }
 }
 
+class OnlineGame {
+    constructor(ticTacToe) {
+        this.ticTacToe = ticTacToe;
+        this.socket = null;
+        this.roomId = null;
+        this.playerSymbol = null;
+        this.isMyTurn = false;
+        this.onlineMode = false;
+    }
+
+    connect() {
+        this.socket = io();
+
+        this.socket.on('connect', () => {
+            console.log('Подключено к серверу');
+        });
+
+        this.socket.on('gameStart', (data) => {
+            this.ticTacToe.board = data.board;
+            this.ticTacToe.currentPlayer = data.currentPlayer;
+            this.ticTacToe.gameActive = true;
+            this.ticTacToe.cells.forEach(cell => {
+                cell.textContent = '';
+                cell.className = 'cell';
+            });
+            this.updateBoard(data.board);
+            this.updateStatusForOnline();
+        });
+
+        this.socket.on('gameUpdate', (data) => {
+            this.ticTacToe.board = data.board;
+            this.updateBoard(data.board);
+
+            if (data.winner === 'draw') {
+                this.ticTacToe.gameActive = false;
+                this.ticTacToe.statusDisplay.textContent = 'Ничья!';
+                this.ticTacToe.statusDisplay.className = 'status draw';
+            } else if (data.winner) {
+                this.ticTacToe.gameActive = false;
+                if (data.winPattern) {
+                    this.ticTacToe.highlightWinPattern(data.winPattern);
+                }
+                const isMe = data.winner === this.playerSymbol;
+                this.ticTacToe.statusDisplay.textContent = isMe ? 'Вы победили!' : 'Вы проиграли!';
+                this.ticTacToe.statusDisplay.className = 'status win';
+            } else {
+                this.ticTacToe.currentPlayer = data.currentPlayer;
+                this.updateStatusForOnline();
+            }
+
+            this.ticTacToe.scores = data.scores;
+            this.ticTacToe.updateScoreDisplay();
+        });
+
+        this.socket.on('playerLeft', (data) => {
+            this.ticTacToe.gameActive = false;
+            this.ticTacToe.statusDisplay.textContent = 'Противник отключился';
+            this.ticTacToe.statusDisplay.className = 'status draw';
+        });
+    }
+
+    createRoom() {
+        this.socket.emit('createRoom', (response) => {
+            if (response.success) {
+                this.roomId = response.roomId;
+                this.playerSymbol = response.symbol;
+                this.onlineMode = true;
+                this.showRoomId();
+                this.ticTacToe.statusDisplay.textContent = 'Ожидание противника...';
+                this.ticTacToe.statusDisplay.className = 'status';
+                this.ticTacToe.gameActive = false;
+            }
+        });
+    }
+
+    joinRoom(roomId) {
+        this.socket.emit('joinRoom', roomId, (response) => {
+            if (response.success) {
+                this.roomId = response.roomId;
+                this.playerSymbol = response.symbol;
+                this.onlineMode = true;
+                this.hideRoomInput();
+            } else {
+                alert(response.error);
+            }
+        });
+    }
+
+    makeMove(index) {
+        if (!this.onlineMode || !this.isMyTurn) return;
+        this.socket.emit('makeMove', { roomId: this.roomId, index });
+    }
+
+    playAgain() {
+        if (this.onlineMode && this.roomId) {
+            this.socket.emit('playAgain', this.roomId);
+        }
+    }
+
+    updateBoard(board) {
+        this.ticTacToe.cells.forEach((cell, i) => {
+            cell.textContent = board[i];
+            if (board[i]) {
+                cell.classList.add('taken');
+                cell.classList.add(board[i].toLowerCase());
+            } else {
+                cell.classList.remove('taken', 'x', 'o');
+            }
+        });
+    }
+
+    updateStatusForOnline() {
+        this.isMyTurn = this.ticTacToe.currentPlayer === this.playerSymbol;
+        const symbol = this.ticTacToe.currentPlayer;
+        this.ticTacToe.statusDisplay.textContent = this.isMyTurn
+            ? `Ваш ход (${this.playerSymbol})`
+            : `Ход противника (${symbol})`;
+        this.ticTacToe.statusDisplay.className = `status ${symbol.toLowerCase()}-turn`;
+    }
+
+    showRoomId() {
+        const roomDiv = document.getElementById('roomIdDisplay');
+        if (roomDiv) roomDiv.remove();
+
+        const div = document.createElement('div');
+        div.id = 'roomIdDisplay';
+        div.className = 'room-display';
+        div.innerHTML = `
+            <p>ID комнаты: <strong>${this.roomId}</strong></p>
+            <p class="hint">Отправьте этот код другу</p>
+            <button class="btn-small" onclick="navigator.clipboard.writeText('${this.roomId}')">Копировать</button>
+        `;
+        document.querySelector('.container').insertBefore(div, document.querySelector('.scoreboard'));
+    }
+
+    hideRoomInput() {
+        const roomInput = document.getElementById('roomInput');
+        if (roomInput) roomInput.remove();
+    }
+}
+
+class RatingSystem {
+    constructor() {
+        this.ratings = {};
+        this.streaks = {};
+        this.loadFromStorage();
+    }
+
+    loadFromStorage() {
+        const saved = localStorage.getItem('ticTacToeRatings');
+        if (saved) {
+            const data = JSON.parse(saved);
+            this.ratings = data.ratings || {};
+            this.streaks = data.streaks || {};
+        }
+    }
+
+    saveToStorage() {
+        localStorage.setItem('ticTacToeRatings', JSON.stringify({
+            ratings: this.ratings,
+            streaks: this.streaks
+        }));
+    }
+
+    getRating(playerId) {
+        return this.ratings[playerId] || 1000;
+    }
+
+    getStreak(playerId) {
+        return this.streaks[playerId] || 0;
+    }
+
+    updateRating(playerId, result) {
+        const currentRating = this.getRating(playerId);
+        const currentStreak = this.getStreak(playerId);
+        let change = 0;
+
+        if (result === 'win') {
+            change = 2;
+            this.streaks[playerId] = currentStreak + 1;
+            if (this.streaks[playerId] >= 4) {
+                change = 3;
+            }
+        } else if (result === 'loss') {
+            change = -1;
+            this.streaks[playerId] = 0;
+        } else {
+            this.streaks[playerId] = 0;
+        }
+
+        this.ratings[playerId] = Math.max(0, currentRating + change);
+        this.saveToStorage();
+
+        return { newRating: this.ratings[playerId], change, streak: this.streaks[playerId] };
+    }
+
+    resetRatings() {
+        this.ratings = {};
+        this.streaks = {};
+        localStorage.removeItem('ticTacToeRatings');
+    }
+}
+
+class ChatSystem {
+    constructor(socket, game) {
+        this.socket = socket;
+        this.game = game;
+        this.container = document.getElementById('chatContainer');
+        this.messagesContainer = document.getElementById('chatMessages');
+        this.input = document.getElementById('chatInput');
+        this.sendBtn = document.getElementById('sendChatBtn');
+
+        this.init();
+    }
+
+    init() {
+        this.sendBtn.addEventListener('click', () => this.sendMessage());
+        this.input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.sendMessage();
+        });
+
+        this.socket.on('chatMessage', (data) => {
+            this.addMessage(data.sender, data.text, data.isOwn);
+        });
+    }
+
+    show() {
+        this.container.style.display = 'block';
+    }
+
+    hide() {
+        this.container.style.display = 'none';
+    }
+
+    sendMessage() {
+        const text = this.input.value.trim();
+        if (!text) return;
+
+        this.socket.emit('sendChatMessage', { text });
+        this.input.value = '';
+    }
+
+    addMessage(sender, text, isOwn) {
+        const div = document.createElement('div');
+        div.className = `chat-message ${isOwn ? 'own' : 'other'}`;
+        div.innerHTML = `
+            <div class="sender">${sender}</div>
+            <div class="text"></div>
+        `;
+        div.querySelector('.text').textContent = text;
+        this.messagesContainer.appendChild(div);
+        this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+    }
+
+    clear() {
+        this.messagesContainer.innerHTML = '';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    new TicTacToe();
+    const game = new TicTacToe();
+    game.onlineGame = new OnlineGame(game);
+    game.onlineGame.connect();
+
+    game.ratingSystem = new RatingSystem();
+    game.chatSystem = new ChatSystem(game.onlineGame.socket, game);
+
+    // Theme toggle
+    const themeBtn = document.getElementById('themeToggleBtn');
+    const savedTheme = localStorage.getItem('ticTacToeTheme');
+    if (savedTheme) {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        themeBtn.textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+    }
+
+    themeBtn.addEventListener('click', () => {
+        const current = document.documentElement.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('ticTacToeTheme', next);
+        themeBtn.textContent = next === 'dark' ? '☀️' : '🌙';
+    });
+
+    // Handle room ID from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomIdFromUrl = urlParams.get('room');
+    if (roomIdFromUrl) {
+        setTimeout(() => {
+            const onlineBtn = document.querySelector('[data-mode="online"]');
+            if (onlineBtn) onlineBtn.click();
+            setTimeout(() => {
+                const input = document.getElementById('roomIdInput');
+                if (input) {
+                    input.value = roomIdFromUrl;
+                    document.getElementById('joinRoomBtn').click();
+                }
+            }, 100);
+        }, 500);
+    }
+
+    const modeToggle = document.querySelector('.mode-toggle');
+    const onlineBtn = document.createElement('button');
+    onlineBtn.className = 'btn-mode';
+    onlineBtn.dataset.mode = 'online';
+    onlineBtn.textContent = 'Онлайн';
+    modeToggle.appendChild(onlineBtn);
+
+    onlineBtn.addEventListener('click', () => {
+        document.querySelectorAll('.btn-mode').forEach(b => b.classList.remove('active'));
+        onlineBtn.classList.add('active');
+        game.mode = 'online';
+        game.onlineMode = true;
+
+        const existing = document.getElementById('roomInput');
+        if (existing) existing.remove();
+
+        const div = document.createElement('div');
+        div.id = 'roomInput';
+        div.className = 'room-input';
+        div.innerHTML = `
+            <button class="btn" id="createRoomBtn">Создать комнату</button>
+            <div class="join-row">
+                <input type="text" id="roomIdInput" placeholder="Введите ID комнаты" maxlength="6">
+                <button class="btn" id="joinRoomBtn">Войти</button>
+            </div>
+        `;
+        document.querySelector('.container').insertBefore(div, document.querySelector('.scoreboard'));
+
+        document.getElementById('createRoomBtn').addEventListener('click', () => {
+            game.onlineGame.createRoom();
+            div.remove();
+        });
+
+        document.getElementById('joinRoomBtn').addEventListener('click', () => {
+            const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
+            if (roomId) {
+                game.onlineGame.joinRoom(roomId);
+            }
+        });
+    });
+
+    const originalHandleCellClick = game.handleCellClick.bind(game);
+    game.handleCellClick = (e) => {
+        e.preventDefault();
+        const cell = e.target.closest('.cell');
+        if (!cell || !game.gameActive || cell.classList.contains('taken')) return;
+
+        if (game.mode === 'bot' && game.currentPlayer === 'O') return;
+
+        if (game.mode === 'online') {
+            const index = parseInt(cell.dataset.index);
+            game.onlineGame.makeMove(index);
+        } else {
+            originalHandleCellClick(e);
+        }
+    };
+
+    const originalResetGame = game.resetGame.bind(game);
+    game.resetGame = () => {
+        if (game.mode === 'online') {
+            game.onlineGame.playAgain();
+        } else {
+            originalResetGame();
+        }
+    };
 });

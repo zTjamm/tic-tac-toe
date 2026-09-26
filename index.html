@@ -49,8 +49,21 @@
             <button class="btn-mode active" data-mode="pvp">2 игрока</button>
             <button class="btn-mode" data-mode="bot">Против бота</button>
         </div>
+
+        <div class="chat-container" id="chatContainer" style="display: none;">
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-row">
+                <input type="text" id="chatInput" placeholder="Введите сообщение..." maxlength="100">
+                <button class="btn-small" id="sendChatBtn">Отправить</button>
+            </div>
+        </div>
     </div>
 
+    <div class="theme-toggle">
+        <button id="themeToggleBtn" title="Переключить тему">🌙</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
     <script src="script.js"></script>
 </body>
 </html>
