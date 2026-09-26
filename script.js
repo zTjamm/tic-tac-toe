@@ -515,6 +515,12 @@ class OnlineUsersManager {
             this.updateList();
         });
 
+        this.socket.on('connect', () => {
+            if (this.game.authSystem?.user) {
+                this.setOnline(this.game.authSystem.user.username);
+            }
+        });
+
         this.socket.on('challengeReceived', (data) => {
             this.showChallengeModal(data);
         });
@@ -846,9 +852,15 @@ class AuthSystem {
 
     async handleSubmit(e) {
         e.preventDefault();
-        const username = document.getElementById('username').value.trim();
-        const password = document.getElementById('password').value;
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
         const isLogin = document.querySelector('.auth-tab.active').dataset.tab === 'login';
+
+        usernameInput.classList.remove('error', 'blink');
+        passwordInput.classList.remove('error', 'blink');
+        void usernameInput.offsetWidth;
 
         try {
             const response = await fetch(isLogin ? '/api/login' : '/api/register', {
@@ -861,6 +873,7 @@ class AuthSystem {
 
             if (!response.ok) {
                 this.errorDiv.textContent = data.error || 'Ошибка';
+                usernameInput.classList.add('error', 'blink');
                 return;
             }
 
@@ -875,6 +888,7 @@ class AuthSystem {
             }
         } catch (err) {
             this.errorDiv.textContent = 'Ошибка сети';
+            usernameInput.classList.add('error', 'blink');
         }
     }
 
@@ -914,6 +928,9 @@ class AuthSystem {
                 <span>Поражений: ${this.user.losses}</span>
                 <span>Ничьих: ${this.user.draws}</span>
             `;
+            if (this.game.onlineUsersManager) {
+                this.game.onlineUsersManager.setOnline(this.user.username);
+            }
         } else {
             this.modal.style.display = 'flex';
             this.userPanel.style.display = 'none';
