@@ -1,22 +1,14 @@
-# Dependencies
-node_modules/
-
-# Logs
-*.log
-npm-debug.log*
-
 # OS
 .DS_Store
 Thumbs.db
 desktop.ini
 
+# Logs
+*.log
+
 # IDE
 .vscode/
 .idea/
 
-# Environment
-.env
-.env.local
-
-# Railway
-.railway/
+# Node (если появится)
+node_modules/
