@@ -6,6 +6,7 @@ class TicTacToe {
         this.mode = 'pvp';
         this.scores = { X: 0, O: 0, Draw: 0 };
         this.botTimer = null;
+        this.playerNames = {};
 
         this.winPatterns = [
             [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -115,8 +116,8 @@ class TicTacToe {
 
     updateStatus() {
         if (!this.gameActive) return;
-        const playerName = this.currentPlayer === 'X' ? 'X' : 'O';
-        this.statusDisplay.textContent = `Ход игрока ${this.currentPlayer} (${playerName})`;
+        const playerName = this.playerNames?.[this.currentPlayer] || this.currentPlayer;
+        this.statusDisplay.textContent = `Ход: ${playerName}`;
         this.statusDisplay.className = `status ${this.currentPlayer.toLowerCase()}-turn`;
     }
 
@@ -517,12 +518,6 @@ class OnlineUsersManager {
     }
 
     init() {
-        document.getElementById('toggleOnlinePanel').addEventListener('click', () => {
-            this.panel.classList.toggle('collapsed');
-            const btn = document.getElementById('toggleOnlinePanel');
-            btn.textContent = this.panel.classList.contains('collapsed') ? 'Развернуть' : 'Свернуть';
-        });
-
         this.socket.on('onlineUsersUpdate', (data) => {
             this.onlineUsers = new Set(data.online);
             this.updateList();
@@ -533,6 +528,48 @@ class OnlineUsersManager {
                 this.setOnline(this.game.authSystem.user.username);
             }
         });
+
+        this.initGlobalChat();
+    }
+
+    initGlobalChat() {
+        const sendBtn = document.getElementById('globalChatSendBtn');
+        const input = document.getElementById('globalChatInput');
+        const messages = document.getElementById('globalChatMessages');
+
+        if (sendBtn && input) {
+            sendBtn.addEventListener('click', () => {
+                const text = input.value.trim();
+                if (text) {
+                    this.socket.emit('sendGlobalChat', { text });
+                    input.value = '';
+                }
+            });
+
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    const text = input.value.trim();
+                    if (text) {
+                        this.socket.emit('sendGlobalChat', { text });
+                        input.value = '';
+                    }
+                }
+            });
+        }
+
+        this.socket.on('globalChatMessage', (data) => {
+            const div = document.createElement('div');
+            const isOwn = data.socketId === this.socket.id;
+            div.className = `global-chat-message ${isOwn ? 'own' : 'other'}`;
+            div.innerHTML = `
+                <div class="sender">${data.sender}</div>
+                <div class="text"></div>
+            `;
+            div.querySelector('.text').textContent = data.text;
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+        });
+    }
 
         this.socket.on('challengeReceived', (data) => {
             this.showChallengeModal(data);

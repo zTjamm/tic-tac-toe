@@ -138,9 +138,19 @@
     <div class="online-panel" id="onlinePanel">
         <div class="online-header">
             <span>Онлайн: <strong id="onlineCount">0</strong></span>
-            <button class="btn-small" id="toggleOnlinePanel">Свернуть</button>
         </div>
         <div class="online-list" id="onlineList"></div>
+    </div>
+
+    <div class="global-chat" id="globalChat">
+        <div class="global-chat-header">
+            <span>Общий чат</span>
+        </div>
+        <div class="global-chat-messages" id="globalChatMessages"></div>
+        <div class="global-chat-input">
+            <input type="text" id="globalChatInput" placeholder="Сообщение всем..." maxlength="200">
+            <button class="btn-small" id="globalChatSendBtn">➤</button>
+        </div>
     </div>
 
     <script src="/socket.io/socket.io.js"></script>

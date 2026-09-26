@@ -287,6 +287,12 @@ app.post('/api/challenge/send', (req, res) => {
         return res.status(400).json({ error: 'Пользователь не в сети' });
     }
 
+    for (const [roomId, room] of rooms.entries()) {
+        if (room.players.some(p => p.username === targetUsername)) {
+            return res.status(400).json({ error: 'Пользователь уже в игре' });
+        }
+    }
+
     const challengeId = generateToken();
     pendingChallenges.set(challengeId, {
         from: session.username,
@@ -545,6 +551,12 @@ io.on('connection', (socket) => {
                 scores: room.scores,
                 players: players
             });
+
+            setTimeout(() => {
+                rooms.delete(roomId);
+                console.log(`Комната удалена после игры: ${roomId}`);
+            }, 60000);
+
             return;
         }
 
@@ -568,6 +580,12 @@ io.on('connection', (socket) => {
                 scores: room.scores,
                 players: players
             });
+
+            setTimeout(() => {
+                rooms.delete(roomId);
+                console.log(`Комната удалена после игры: ${roomId}`);
+            }, 60000);
+
             return;
         }
 
@@ -611,6 +629,18 @@ io.on('connection', (socket) => {
             sender: player.username || player.symbol,
             text: text,
             isOwn: false,
+            socketId: socket.id
+        });
+    });
+
+    socket.on('sendGlobalChat', (data) => {
+        const { text } = data;
+        const player = Array.from(onlineUsers.values()).find(u => u.socketId === socket.id);
+        if (!player) return;
+
+        io.emit('globalChatMessage', {
+            sender: player.username,
+            text: text,
             socketId: socket.id
         });
     });

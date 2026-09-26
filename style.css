@@ -982,10 +982,6 @@ h1 {
     transition: all 0.3s ease;
 }
 
-.online-panel.collapsed {
-    width: auto;
-}
-
 .online-header {
     display: flex;
     justify-content: space-between;
@@ -994,12 +990,6 @@ h1 {
     background: var(--accent);
     color: white;
     font-weight: bold;
-}
-
-.online-header .btn-small {
-    background: rgba(255, 255, 255, 0.2);
-    padding: 4px 10px;
-    font-size: 0.75em;
 }
 
 .online-list {
@@ -1046,6 +1036,89 @@ h1 {
 .online-item .challenge-btn {
     padding: 4px 10px;
     font-size: 0.75em;
+}
+
+.global-chat {
+    position: fixed;
+    bottom: 20px;
+    left: 20px;
+    width: 300px;
+    background: var(--container-bg);
+    border-radius: 15px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: 400px;
+}
+
+.global-chat-header {
+    padding: 12px 15px;
+    background: var(--accent);
+    color: white;
+    font-weight: bold;
+}
+
+.global-chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    max-height: 250px;
+}
+
+.global-chat-message {
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    max-width: 85%;
+}
+
+.global-chat-message.own {
+    background: var(--accent);
+    color: white;
+    margin-left: auto;
+    text-align: right;
+}
+
+.global-chat-message.other {
+    background: var(--cell-hover);
+    color: var(--text-color);
+}
+
+.global-chat-message .sender {
+    font-size: 0.75em;
+    font-weight: bold;
+    margin-bottom: 2px;
+    opacity: 0.8;
+}
+
+.global-chat-input {
+    display: flex;
+    gap: 8px;
+    padding: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.global-chat-input input {
+    flex: 1;
+    padding: 8px 12px;
+    border: 2px solid var(--input-border);
+    border-radius: 8px;
+    background: var(--input-bg);
+    color: var(--text-color);
+    font-size: 0.85em;
+    outline: none;
+}
+
+.global-chat-input input:focus {
+    border-color: var(--input-focus);
+}
+
+.global-chat-input .btn-small {
+    padding: 6px 12px;
+    font-size: 0.85em;
 }
 
 @media (max-width: 480px) {
@@ -1203,11 +1276,19 @@ h1 {
         max-height: 30vh;
     }
 
-    .online-panel.collapsed {
-        width: auto;
+    .online-list {
+        max-height: 150px;
     }
 
-    .online-list {
+    .global-chat {
+        bottom: 5px;
+        left: 5px;
+        right: 5px;
+        width: auto;
+        max-height: 30vh;
+    }
+
+    .global-chat-messages {
         max-height: 150px;
     }
 
