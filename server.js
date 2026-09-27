@@ -775,6 +775,12 @@ app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
         return next();
     }
+    // Запрос статического файла (есть расширение), которого нет в dist —
+    // отдаём 404, а не index.html. Иначе браузер попытается выполнить
+    // HTML как JS и покажет непонятную ошибку вместо ясного 404.
+    if (path.extname(req.path)) {
+        return next();
+    }
     if (!hasReactBuild) {
         return res.status(503).type('text/plain; charset=utf-8')
             .send('Фронтенд не собран. Выполните: cd tic-tac-toe-react && npm run build');
