@@ -117,7 +117,8 @@ class TicTacToe {
     updateStatus() {
         if (!this.gameActive) return;
         const playerName = this.playerNames?.[this.currentPlayer] || this.currentPlayer;
-        this.statusDisplay.textContent = `Ход: ${playerName}`;
+        const symbol = this.currentPlayer;
+        this.statusDisplay.textContent = `Ход: ${symbol} (${playerName})`;
         this.statusDisplay.className = `status ${this.currentPlayer.toLowerCase()}-turn`;
     }
 
@@ -231,7 +232,7 @@ class TicTacToe {
 
 class OnlineGame {
     constructor(ticTacToe) {
-        this.ticTacToe = ticTacToe;
+        this.game = ticTacToe;
         this.socket = null;
         this.roomId = null;
         this.playerSymbol = null;
@@ -247,10 +248,10 @@ class OnlineGame {
         });
 
         this.socket.on('gameStart', (data) => {
-            this.ticTacToe.board = data.board;
-            this.ticTacToe.currentPlayer = data.currentPlayer;
-            this.ticTacToe.gameActive = true;
-            this.ticTacToe.cells.forEach(cell => {
+            this.game.board = data.board;
+            this.game.currentPlayer = data.currentPlayer;
+            this.game.gameActive = true;
+            this.game.cells.forEach(cell => {
                 cell.textContent = '';
                 cell.className = 'cell';
             });
@@ -258,62 +259,75 @@ class OnlineGame {
 
             if (data.players && data.players.length >= 2) {
                 const names = data.players;
-                this.playerName = names.find(n => n === this.playerSymbol || n === this.ticTacToe.authSystem?.user?.username) || this.playerSymbol;
+                this.playerName = names.find(n => n === this.playerSymbol || n === this.game.authSystem?.user?.username) || this.playerSymbol;
                 this.opponentName = names.find(n => n !== this.playerName) || (this.playerSymbol === 'X' ? 'O' : 'X');
             }
+
+            const labelX = document.getElementById('labelX');
+            const labelO = document.getElementById('labelO');
+            if (labelX) labelX.textContent = 'Игрок ' + this.playerSymbol + ' (' + this.playerName + ')';
+            if (labelO) labelO.textContent = 'Игрок ' + (this.playerSymbol === 'X' ? 'O' : 'X') + ' (' + this.opponentName + ')';
 
             this.updateStatusForOnline();
         });
 
         this.socket.on('gameUpdate', (data) => {
-            this.ticTacToe.board = data.board;
+            console.log('[OnlineGame] gameUpdate received:', { currentPlayer: data.currentPlayer, winner: data.winner, players: data.players });
+            this.game.board = data.board;
             this.updateBoard(data.board);
 
             if (data.winner === 'draw') {
-                this.ticTacToe.gameActive = false;
-                this.ticTacToe.statusDisplay.textContent = 'Ничья!';
-                this.ticTacToe.statusDisplay.className = 'status draw';
+                this.game.gameActive = false;
+                this.game.statusDisplay.textContent = 'Ничья!';
+                this.game.statusDisplay.className = 'status draw';
             } else if (data.winner) {
-                this.ticTacToe.gameActive = false;
+                this.game.gameActive = false;
                 if (data.winPattern) {
-                    this.ticTacToe.highlightWinPattern(data.winPattern);
+                    this.game.highlightWinPattern(data.winPattern);
                 }
                 const isMe = data.winner === this.playerSymbol;
-                this.ticTacToe.statusDisplay.textContent = isMe ? 'Вы победили!' : 'Вы проиграли!';
-                this.ticTacToe.statusDisplay.className = 'status win';
+                this.game.statusDisplay.textContent = isMe ? 'Вы победили!' : 'Вы проиграли!';
+                this.game.statusDisplay.className = 'status win';
             } else {
-                this.ticTacToe.currentPlayer = data.currentPlayer;
+                this.game.currentPlayer = data.currentPlayer;
+                this.isMyTurn = this.game.currentPlayer === this.playerSymbol;
                 this.updateStatusForOnline();
             }
 
-            this.ticTacToe.scores = data.scores;
-            this.ticTacToe.updateScoreDisplay();
+            this.game.scores = data.scores;
+            this.game.updateScoreDisplay();
+
+            if (data.players && data.players.length >= 2) {
+                const labelX = document.getElementById('labelX');
+                const labelO = document.getElementById('labelO');
+                if (labelX) labelX.textContent = 'Игрок X (' + (data.players.find(p => p.symbol === 'X')?.username || 'X') + ')';
+                if (labelO) labelO.textContent = 'Игрок O (' + (data.players.find(p => p.symbol === 'O')?.username || 'O') + ')';
+            }
         });
 
         this.socket.on('playerLeft', (data) => {
-            this.ticTacToe.gameActive = false;
-            this.ticTacToe.statusDisplay.textContent = 'Противник отключился';
-            this.ticTacToe.statusDisplay.className = 'status draw';
+            this.game.gameActive = false;
+            this.game.statusDisplay.textContent = 'Противник отключился';
+            this.game.statusDisplay.className = 'status draw';
         });
     }
 
     createRoom() {
-        const username = this.ticTacToe.authSystem?.user?.username || 'X';
+        const username = this.game.authSystem?.user?.username || 'X';
         this.socket.emit('createRoom', { username }, (response) => {
             if (response.success) {
                 this.roomId = response.roomId;
                 this.playerSymbol = response.symbol;
                 this.onlineMode = true;
-                this.showRoomId();
-                this.ticTacToe.statusDisplay.textContent = 'Ожидание противника...';
-                this.ticTacToe.statusDisplay.className = 'status';
-                this.ticTacToe.gameActive = false;
+                this.game.statusDisplay.textContent = 'Ожидание противника...';
+                this.game.statusDisplay.className = 'status';
+                this.game.gameActive = false;
             }
         });
     }
 
     joinRoom(roomId) {
-        const username = this.ticTacToe.authSystem?.user?.username || 'O';
+        const username = this.game.authSystem?.user?.username || 'O';
         this.socket.emit('joinRoom', roomId, { username }, (response) => {
             if (response.success) {
                 this.roomId = response.roomId;
@@ -327,18 +341,35 @@ class OnlineGame {
     }
 
     makeMove(index) {
-        if (!this.onlineMode || !this.isMyTurn) return;
+        console.log('[OnlineGame] makeMove called, index:', index, 'isMyTurn:', this.isMyTurn, 'onlineMode:', this.onlineMode);
+        if (!this.onlineMode || !this.isMyTurn) {
+            console.log('[OnlineGame] makeMove blocked - not my turn or not online');
+            return;
+        }
         this.socket.emit('makeMove', { roomId: this.roomId, index });
+        console.log('[OnlineGame] makeMove emitted');
     }
 
     playAgain() {
+        console.log('[OnlineGame] playAgain called, roomId:', this.roomId, 'onlineMode:', this.onlineMode);
         if (this.onlineMode && this.roomId) {
             this.socket.emit('playAgain', this.roomId);
+            console.log('[OnlineGame] playAgain emitted');
+            this.game.board = Array(9).fill('');
+            this.game.currentPlayer = 'X';
+            this.game.gameActive = true;
+            this.game.cells.forEach(cell => {
+                cell.textContent = '';
+                cell.className = 'cell';
+            });
+            this.isMyTurn = this.playerSymbol === 'X';
+            console.log('[OnlineGame] isMyTurn:', this.isMyTurn, 'playerSymbol:', this.playerSymbol);
+            this.updateStatusForOnline();
         }
     }
 
     updateBoard(board) {
-        this.ticTacToe.cells.forEach((cell, i) => {
+        this.game.cells.forEach((cell, i) => {
             cell.textContent = board[i];
             if (board[i]) {
                 cell.classList.add('taken');
@@ -350,35 +381,17 @@ class OnlineGame {
     }
 
     updateStatusForOnline() {
-        this.isMyTurn = this.ticTacToe.currentPlayer === this.playerSymbol;
-        const symbol = this.ticTacToe.currentPlayer;
+        this.isMyTurn = this.game.currentPlayer === this.playerSymbol;
+        const symbol = this.game.currentPlayer;
         const playerName = this.playerName || this.playerSymbol;
         const opponentName = this.opponentName || (this.currentPlayer === 'X' ? 'X' : 'O');
 
         if (this.isMyTurn) {
-            this.ticTacToe.statusDisplay.textContent = `Ваш ход (${playerName})`;
+            this.game.statusDisplay.textContent = `Ваш ход (${playerName})`;
         } else {
-            this.ticTacToe.statusDisplay.textContent = `Ход противника (${opponentName})`;
+            this.game.statusDisplay.textContent = `Ход противника (${opponentName})`;
         }
-        this.ticTacToe.statusDisplay.className = `status ${symbol.toLowerCase()}-turn`;
-    }
-
-    showRoomId() {
-        const roomDiv = document.getElementById('roomIdDisplay');
-        if (roomDiv) roomDiv.remove();
-
-        const inviteLink = `${window.location.origin}?room=${this.roomId}`;
-
-        const div = document.createElement('div');
-        div.id = 'roomIdDisplay';
-        div.className = 'room-display';
-        div.innerHTML = `
-            <p>ID комнаты: <strong>${this.roomId}</strong></p>
-            <p class="hint">Отправьте этот код другу</p>
-            <button class="btn-small" onclick="navigator.clipboard.writeText('${this.roomId}')">Копировать ID</button>
-            <button class="btn-small" onclick="navigator.clipboard.writeText('${inviteLink}')">Копировать ссылку</button>
-        `;
-        document.querySelector('.container').insertBefore(div, document.querySelector('.scoreboard'));
+        this.game.statusDisplay.className = `status ${symbol.toLowerCase()}-turn`;
     }
 
     hideRoomInput() {
@@ -442,11 +455,6 @@ class RatingSystem {
         return { newRating: this.ratings[playerId], change, streak: this.streaks[playerId] };
     }
 
-    resetRatings() {
-        this.ratings = {};
-        this.streaks = {};
-        localStorage.removeItem('ticTacToeRatings');
-    }
 }
 
 class ChatSystem {
@@ -527,9 +535,56 @@ class OnlineUsersManager {
             if (this.game.authSystem?.user) {
                 this.setOnline(this.game.authSystem.user.username);
             }
+            this.loadChatHistory();
         });
 
         this.initGlobalChat();
+        this.initSideTabs();
+
+        this.socket.on('challengeReceived', (data) => {
+            this.showChallengeModal(data);
+        });
+
+        this.socket.on('challengeAccepted', (data) => {
+            console.log('[OnlineUsersManager] challengeAccepted:', data);
+            document.getElementById('challengeModal').style.display = 'none';
+            this.game.mode = 'online';
+            this.game.onlineGame.roomId = data.roomId;
+            this.game.onlineGame.playerSymbol = data.symbol;
+            this.game.onlineGame.onlineMode = true;
+            this.game.onlineGame.isMyTurn = data.symbol === 'X';
+
+            this.game.board = Array(9).fill('');
+            this.game.currentPlayer = 'X';
+            this.game.gameActive = true;
+            this.game.cells.forEach(cell => {
+                cell.textContent = '';
+                cell.className = 'cell';
+            });
+
+            const sidePanel = document.getElementById('sidePanel');
+            sidePanel.classList.remove('fullscreen');
+            sidePanel.classList.add('in-game');
+            document.getElementById('board').style.display = 'grid';
+            const closeGameBtn = document.getElementById('closeGameBtn');
+            if (closeGameBtn) closeGameBtn.style.display = 'block';
+
+            const opponentName = data.opponent || 'Соперник';
+            this.game.onlineGame.playerName = this.game.authSystem?.user?.username || 'Игрок';
+            this.game.onlineGame.opponentName = opponentName;
+
+            const labelX = document.getElementById('labelX');
+            const labelO = document.getElementById('labelO');
+            if (labelX) labelX.textContent = 'Игрок X (' + this.game.onlineGame.playerName + ')';
+            if (labelO) labelO.textContent = 'Игрок O (' + opponentName + ')';
+
+            this.game.updateStatus();
+            console.log('[OnlineUsersManager] challengeAccepted completed, mode:', this.game.mode);
+        });
+
+        this.socket.on('challengeDeclined', (data) => {
+            alert(`${data.by} отклонил ваш вызов`);
+        });
     }
 
     initGlobalChat() {
@@ -571,30 +626,6 @@ class OnlineUsersManager {
         });
     }
 
-        this.socket.on('challengeReceived', (data) => {
-            this.showChallengeModal(data);
-        });
-
-        this.socket.on('challengeAccepted', (data) => {
-            document.getElementById('challengeModal').style.display = 'none';
-            this.game.onlineGame.roomId = data.roomId;
-            this.game.onlineGame.playerSymbol = data.symbol;
-            this.game.onlineGame.onlineMode = true;
-            this.game.onlineGame.showRoomId();
-            this.game.ticTacToe.statusDisplay.textContent = 'Игра началась!';
-            this.game.ticTacToe.statusDisplay.className = 'status';
-            this.game.ticTacToe.gameActive = true;
-        });
-
-        this.socket.on('challengeDeclined', (data) => {
-            alert(`${data.by} отклонил ваш вызов`);
-        });
-
-        if (this.game.authSystem?.user) {
-            this.setOnline(this.game.authSystem.user.username);
-        }
-    }
-
     setOnline(username) {
         this.socket.emit('userOnline', { username });
     }
@@ -603,27 +634,198 @@ class OnlineUsersManager {
         this.socket.emit('userOffline', { username });
     }
 
-    updateList() {
-        this.count.textContent = this.onlineUsers.size;
+    initSideTabs() {
+        const tabs = document.querySelectorAll('.side-tab');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const target = tab.dataset.tab;
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                document.querySelectorAll('.side-page').forEach(page => {
+                    page.classList.remove('active');
+                });
+                const targetPage = document.getElementById('page-' + target);
+                if (targetPage) targetPage.classList.add('active');
+                if (target === 'online') {
+                    this.loadChatHistory();
+                }
+                if (target === 'friends' && this.game.friendsManager) {
+                    this.game.friendsManager.loadFriends();
+                }
+                if (target === 'leaderboard') {
+                    this.loadLeaderboard();
+                }
+            });
+        });
 
+        const botBtn = document.getElementById('botGameBtn');
+        if (botBtn) {
+            botBtn.addEventListener('click', () => {
+                this.startBotGame();
+            });
+        }
+    }
+
+    startBotGame() {
+        console.log('[OnlineUsersManager] startBotGame called');
+        document.getElementById('gameContainer').style.display = 'block';
+        const sidePanel = document.getElementById('sidePanel');
+        sidePanel.classList.remove('fullscreen');
+        sidePanel.classList.add('in-game');
+        const board = document.getElementById('board');
+        board.style.display = 'grid';
+        this.game.mode = 'bot';
+        const playerName = this.game.authSystem?.user?.username || 'Игрок';
+        this.game.playerNames = { X: playerName, O: 'Бот' };
+
+        const labelX = document.getElementById('labelX');
+        const labelO = document.getElementById('labelO');
+        if (labelX) labelX.textContent = 'Игрок X (' + playerName + ')';
+        if (labelO) labelO.textContent = 'Игрок O (Бот)';
+
+        const closeGameBtn = document.getElementById('closeGameBtn');
+        if (closeGameBtn) closeGameBtn.style.display = 'block';
+
+        this.game.resetGame();
+        this.game.updateStatus();
+        console.log('[OnlineUsersManager] startBotGame completed');
+    }
+
+    closeGame() {
+        console.log('[OnlineUsersManager] closeGame called');
+        document.getElementById('gameContainer').style.display = 'none';
+        const sidePanel = document.getElementById('sidePanel');
+        sidePanel.classList.remove('in-game');
+        sidePanel.classList.add('fullscreen');
+        const closeGameBtn = document.getElementById('closeGameBtn');
+        if (closeGameBtn) closeGameBtn.style.display = 'none';
+        const labelX = document.getElementById('labelX');
+        const labelO = document.getElementById('labelO');
+        if (labelX) labelX.textContent = 'Игрок X';
+        if (labelO) labelO.textContent = 'Игрок O';
+        this.game.mode = 'pvp';
+        this.game.onlineGame.onlineMode = false;
+        this.game.onlineGame.roomId = null;
+        this.game.gameActive = false;
+        console.log('[OnlineUsersManager] closeGame completed');
+    }
+
+    async loadChatHistory() {
+        try {
+            const response = await fetch('/api/chat-history');
+            const history = await response.json();
+            const messagesContainer = document.getElementById('globalChatMessages');
+            if (!messagesContainer) return;
+
+            messagesContainer.innerHTML = history.map(msg => {
+                const isOwn = msg.socketId === this.socket.id;
+                return `
+                <div class="global-chat-message ${isOwn ? 'own' : 'other'}">
+                    <div class="sender">${msg.sender}</div>
+                    <div class="text"></div>
+                </div>
+            `}).join('');
+
+            messagesContainer.querySelectorAll('.text').forEach((el, i) => {
+                el.textContent = history[i].text;
+            });
+
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        } catch (err) {
+            console.error('Ошибка загрузки истории чата:', err);
+        }
+    }
+
+    async loadLeaderboard() {
+        try {
+            const response = await fetch('/api/leaderboard');
+            const leaderboard = await response.json();
+            const list = document.getElementById('leaderboardListSide');
+            if (!list) {
+                console.error('leaderboardListSide не найден');
+                return;
+            }
+            const currentUsername = this.game.authSystem?.user?.username;
+            list.innerHTML = leaderboard.map((player, index) => `
+                <div class="leaderboard-item ${player.username === currentUsername ? 'current-user' : ''}">
+                    <span class="leaderboard-rank">${index + 1}</span>
+                    <div class="leaderboard-info">
+                        <div class="leaderboard-name">${player.username}</div>
+                        <div class="leaderboard-stats">${player.wins}В / ${player.losses}П / ${player.draws}Н</div>
+                    </div>
+                    <span class="leaderboard-rating">${player.rating}</span>
+                </div>
+            `).join('');
+        } catch (err) {
+            console.error('Ошибка загрузки таблицы лидеров:', err);
+        }
+    }
+
+    async updateList() {
         const currentUsername = this.game.authSystem?.user?.username;
-        const filteredUsers = Array.from(this.onlineUsers).filter(u => u !== currentUsername);
+        const allUsers = Array.from(this.onlineUsers);
+        console.log('[OnlineUsersManager] updateList called, onlineUsers:', allUsers, 'currentUsername:', currentUsername);
 
-        if (filteredUsers.length === 0) {
+        const sortedUsers = allUsers.sort((a, b) => {
+            if (a === currentUsername) return -1;
+            if (b === currentUsername) return 1;
+            return 0;
+        });
+
+        this.count.textContent = sortedUsers.length;
+
+        if (sortedUsers.length === 0) {
             this.list.innerHTML = '<div style="padding: 15px; text-align: center; color: var(--text-muted);">Никого нет онлайн</div>';
             return;
         }
 
-        this.list.innerHTML = filteredUsers.map(username => `
-            <div class="online-item" data-username="${username}">
-                <span class="online-dot"></span>
-                <div class="online-info">
-                    <div class="online-name">${username}</div>
-                    <div class="online-rating">Рейтинг: ${this.game.authSystem?.user?.username === username ? this.game.authSystem.user.rating : '???'}</div>
+        try {
+            const [onlineResponse, friendsResponse] = await Promise.all([
+                fetch('/api/online'),
+                this.game.authSystem?.token ? fetch('/api/friends', {
+                    headers: { 'Authorization': `Bearer ${this.game.authSystem.token}` }
+                }) : Promise.resolve({ json: () => Promise.resolve([]) })
+            ]);
+            const onlineData = await onlineResponse.json();
+            const friendsData = await friendsResponse.json();
+
+            const ratingsMap = {};
+            onlineData.forEach(u => {
+                ratingsMap[u.username] = u.rating;
+            });
+
+            const friendsSet = new Set(friendsData.map(f => f.username));
+
+            this.list.innerHTML = sortedUsers.map(username => {
+                const isCurrentUser = username === currentUsername;
+                const isFriend = friendsSet.has(username);
+                const rating = ratingsMap[username] || 1000;
+                return `
+                <div class="online-item ${isCurrentUser ? 'current-user' : ''}" data-username="${username}">
+                    <span class="online-dot"></span>
+                    <div class="online-info">
+                        <div class="online-name">${username}${isCurrentUser ? ' (вы)' : ''}</div>
+                        <div class="online-rating">Рейтинг: ${rating}</div>
+                    </div>
+                    ${!isCurrentUser ? `${!isFriend ? `<button class="btn-small friend-btn" data-username="${username}">+ Друг</button>` : '<span class="friend-badge">✓ Друг</span>'}<button class="btn-small challenge-btn" data-username="${username}">Вызвать</button>` : ''}
                 </div>
-                <button class="btn-small challenge-btn" data-username="${username}">Вызвать</button>
-            </div>
-        `).join('');
+            `}).join('');
+        } catch (err) {
+            console.error('Ошибка загрузки списка:', err);
+            this.list.innerHTML = sortedUsers.map(username => {
+                const isCurrentUser = username === currentUsername;
+                const rating = isCurrentUser ? this.game.authSystem?.user?.rating || 1000 : '???';
+                return `
+                <div class="online-item ${isCurrentUser ? 'current-user' : ''}" data-username="${username}">
+                    <span class="online-dot"></span>
+                    <div class="online-info">
+                        <div class="online-name">${username}${isCurrentUser ? ' (вы)' : ''}</div>
+                        <div class="online-rating">Рейтинг: ${rating}</div>
+                    </div>
+                    ${!isCurrentUser ? `<button class="btn-small challenge-btn" data-username="${username}">Вызвать</button>` : ''}
+                </div>
+            `}).join('');
+        }
 
         this.list.querySelectorAll('.challenge-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -631,6 +833,59 @@ class OnlineUsersManager {
                 const targetUsername = btn.dataset.username;
                 this.sendChallenge(targetUsername);
             });
+        });
+
+        this.list.querySelectorAll('.friend-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const targetUsername = btn.dataset.username;
+                this.addFriend(targetUsername, btn);
+            });
+        });
+    }
+
+    addFriend(username, btnElement = null) {
+        if (!this.game.authSystem?.token) {
+            alert('Войдите в аккаунт, чтобы добавлять друзей');
+            return;
+        }
+        fetch('/api/friends/add', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.game.authSystem.token}`
+            },
+            body: JSON.stringify({ friendUsername: username })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                if (btnElement) {
+                    btnElement.textContent = 'В друзьях';
+                    btnElement.style.background = '#2196F3';
+                    btnElement.disabled = true;
+                }
+            } else {
+                alert(data.error || 'Ошибка');
+            }
+        });
+    }
+
+    removeFriend(username) {
+        if (!this.game.authSystem?.token) return;
+        fetch('/api/friends/remove', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.game.authSystem.token}`
+            },
+            body: JSON.stringify({ friendUsername: username })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                this.updateList();
+            }
         });
     }
 
@@ -704,8 +959,8 @@ class FriendsManager {
     constructor(game) {
         this.game = game;
         this.modal = document.getElementById('friendsModal');
-        this.list = document.getElementById('friendsList');
-        this.searchInput = document.getElementById('friendSearch');
+        this.list = document.getElementById('friendsListSide');
+        this.searchInput = document.getElementById('friendSearchSide');
 
         this.init();
     }
@@ -715,21 +970,13 @@ class FriendsManager {
             this.modal.style.display = 'none';
         });
 
-        this.searchInput.addEventListener('input', (e) => {
-            this.searchUser(e.target.value);
-        });
+        if (this.searchInput) {
+            this.searchInput.addEventListener('input', (e) => {
+                this.searchUser(e.target.value);
+            });
+        }
 
-        const friendsBtn = document.createElement('button');
-        friendsBtn.className = 'btn';
-        friendsBtn.textContent = 'Друзья';
-        friendsBtn.style.marginTop = '10px';
-        friendsBtn.addEventListener('click', () => this.showFriends());
-        document.querySelector('.controls').appendChild(friendsBtn);
-    }
-
-    showFriends() {
-        this.modal.style.display = 'flex';
-        this.loadFriends();
+        // Кнопка друзей убрана по требованию пользователя
     }
 
     loadFriends() {
@@ -803,13 +1050,13 @@ class FriendsManager {
 
             div.querySelectorAll('.add-friend-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    this.addFriend(btn.dataset.username);
+                    this.addFriend(btn.dataset.username, btn);
                 });
             });
         }
     }
 
-    addFriend(username) {
+    addFriend(username, btnElement = null) {
         if (!this.game.authSystem?.token) {
             alert('Войдите в аккаунт');
             return;
@@ -826,8 +1073,13 @@ class FriendsManager {
         .then(res => res.json())
         .then(data => {
             if (data.success) {
-                alert(`${username} добавлен в друзья`);
-                this.loadFriends();
+                if (btnElement) {
+                    btnElement.textContent = 'В друзьях';
+                    btnElement.style.background = '#2196F3';
+                    btnElement.disabled = true;
+                } else {
+                    this.loadFriends();
+                }
             } else {
                 alert(data.error || 'Ошибка');
             }
@@ -868,13 +1120,30 @@ class AuthSystem {
     }
 
     init() {
+        console.log('AuthSystem init');
         const tabs = document.querySelectorAll('.auth-tab');
+        console.log('Найдено вкладок:', tabs.length);
         tabs.forEach(tab => {
             tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
         });
 
-        this.form.addEventListener('submit', (e) => this.handleSubmit(e));
-        document.getElementById('authClose').addEventListener('click', () => this.closeModal());
+        if (this.form) {
+            console.log('Форма найдена, привязываем обработчик');
+            this.form.addEventListener('submit', (e) => this.handleSubmit(e));
+        } else {
+            console.error('Форма НЕ найдена!');
+        }
+
+        const closeBtn = document.getElementById('authClose');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.closeModal());
+        }
+
+        if (this.modal) {
+            this.modal.addEventListener('click', (e) => {
+                if (e.target === this.modal) this.closeModal();
+            });
+        }
         document.getElementById('logoutBtn').addEventListener('click', () => this.logout());
         document.getElementById('profileBtn').addEventListener('click', () => this.showProfile());
         document.getElementById('profileClose').addEventListener('click', () => this.hideProfile());
@@ -882,14 +1151,11 @@ class AuthSystem {
 
         if (this.token) {
             this.loadProfile();
+        } else {
+            this.modal.classList.remove('hidden');
         }
 
-        const leaderboardBtn = document.createElement('button');
-        leaderboardBtn.className = 'btn';
-        leaderboardBtn.textContent = 'Таблица лидеров';
-        leaderboardBtn.style.marginTop = '10px';
-        leaderboardBtn.addEventListener('click', () => this.showLeaderboard());
-        document.querySelector('.controls').appendChild(leaderboardBtn);
+        // Кнопка таблицы лидеров убрана по требованию пользователя
     }
 
     switchTab(tab) {
@@ -908,6 +1174,8 @@ class AuthSystem {
         const password = passwordInput.value;
         const isLogin = document.querySelector('.auth-tab.active').dataset.tab === 'login';
 
+        console.log('Отправка формы:', { username, isLogin });
+
         usernameInput.classList.remove('error', 'blink');
         passwordInput.classList.remove('error', 'blink');
         void usernameInput.offsetWidth;
@@ -919,7 +1187,10 @@ class AuthSystem {
                 body: JSON.stringify({ username, password })
             });
 
+            console.log('Ответ сервера:', response.status, response.statusText);
+
             const data = await response.json();
+            console.log('Данные ответа:', data);
 
             if (!response.ok) {
                 this.errorDiv.textContent = data.error || 'Ошибка';
@@ -928,15 +1199,24 @@ class AuthSystem {
             }
 
             if (data.token) {
+                console.log('Токен получен, закрываем окно');
                 this.token = data.token;
                 this.user = data.user;
                 localStorage.setItem('ticTacToeToken', this.token);
-                this.closeModal();
-                this.updateUI();
+                this.modal.classList.add('hidden');
+                const profileBtn = document.getElementById('profileBtn');
+                const logoutBtn = document.getElementById('logoutBtn');
+                if (profileBtn) profileBtn.style.display = 'flex';
+                if (logoutBtn) logoutBtn.style.display = 'flex';
+                if (this.game.onlineUsersManager) {
+                    this.game.onlineUsersManager.setOnline(this.user.username);
+                    this.game.onlineUsersManager.updateList();
+                }
             } else {
                 this.errorDiv.textContent = data.message || 'Регистрация успешна! Теперь войдите.';
             }
         } catch (err) {
+            console.error('Ошибка:', err);
             this.errorDiv.textContent = 'Ошибка сети';
             usernameInput.classList.add('error', 'blink');
         }
@@ -971,31 +1251,27 @@ class AuthSystem {
         const profileBtn = document.getElementById('profileBtn');
         const logoutBtn = document.getElementById('logoutBtn');
 
+
+
         if (this.user) {
-            this.modal.style.display = 'none';
-            this.userPanel.style.display = 'flex';
-            document.getElementById('userName').textContent = this.user.username;
-            document.getElementById('userRating').textContent = `Рейтинг: ${this.user.rating}`;
-            document.getElementById('userStats').innerHTML = `
-                <span>Побед: ${this.user.wins}</span>
-                <span>Поражений: ${this.user.losses}</span>
-                <span>Ничьих: ${this.user.draws}</span>
-            `;
+            this.modal.classList.add('hidden');
             if (profileBtn) profileBtn.style.display = 'flex';
             if (logoutBtn) logoutBtn.style.display = 'flex';
             if (this.game.onlineUsersManager) {
                 this.game.onlineUsersManager.setOnline(this.user.username);
+                this.game.onlineUsersManager.updateList();
+            } else {
+                console.error('onlineUsersManager not found!');
             }
         } else {
-            this.modal.style.display = 'flex';
-            this.userPanel.style.display = 'none';
+            this.modal.classList.remove('hidden');
             if (profileBtn) profileBtn.style.display = 'none';
             if (logoutBtn) logoutBtn.style.display = 'none';
         }
     }
 
     closeModal() {
-        this.modal.style.display = 'none';
+        this.modal.classList.add('hidden');
     }
 
     showProfile() {
@@ -1047,44 +1323,22 @@ class AuthSystem {
         document.getElementById('profileModal').style.display = 'none';
     }
 
-    async showLeaderboard() {
-        const modal = document.getElementById('leaderboardModal');
-        modal.style.display = 'flex';
-
-        try {
-            const response = await fetch('/api/leaderboard');
-            const leaderboard = await response.json();
-
-            const list = document.getElementById('leaderboardList');
-            list.innerHTML = leaderboard.map((player, index) => `
-                <div class="leaderboard-item ${player.username === this.user?.username ? 'current-user' : ''}">
-                    <span class="leaderboard-rank">${index + 1}</span>
-                    <div class="leaderboard-info">
-                        <div class="leaderboard-name">${player.username}</div>
-                        <div class="leaderboard-stats">${player.wins}В / ${player.losses}П / ${player.draws}Н</div>
-                    </div>
-                    <span class="leaderboard-rating">${player.rating}</span>
-                </div>
-            `).join('');
-        } catch (err) {
-            console.error('Ошибка загрузки таблицы лидеров:', err);
-        }
-    }
-
     hideLeaderboard() {
         document.getElementById('leaderboardModal').style.display = 'none';
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('sidePanel').classList.add('fullscreen');
+
     const game = new TicTacToe();
     game.onlineGame = new OnlineGame(game);
     game.onlineGame.connect();
 
     game.ratingSystem = new RatingSystem();
     game.chatSystem = new ChatSystem(game.onlineGame.socket, game);
-    game.authSystem = new AuthSystem(game);
     game.onlineUsersManager = new OnlineUsersManager(game.onlineGame.socket, game);
+    game.authSystem = new AuthSystem(game);
     game.friendsManager = new FriendsManager(game);
 
     // Theme toggle
@@ -1120,47 +1374,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 500);
     }
 
-    const modeToggle = document.querySelector('.mode-toggle');
-    const onlineBtn = document.createElement('button');
-    onlineBtn.className = 'btn-mode';
-    onlineBtn.dataset.mode = 'online';
-    onlineBtn.textContent = 'Онлайн';
-    modeToggle.appendChild(onlineBtn);
-
-    onlineBtn.addEventListener('click', () => {
-        document.querySelectorAll('.btn-mode').forEach(b => b.classList.remove('active'));
-        onlineBtn.classList.add('active');
-        game.mode = 'online';
-        game.onlineMode = true;
-
-        const existing = document.getElementById('roomInput');
-        if (existing) existing.remove();
-
-        const div = document.createElement('div');
-        div.id = 'roomInput';
-        div.className = 'room-input';
-        div.innerHTML = `
-            <button class="btn" id="createRoomBtn">Создать комнату</button>
-            <div class="join-row">
-                <input type="text" id="roomIdInput" placeholder="Введите ID комнаты" maxlength="6">
-                <button class="btn" id="joinRoomBtn">Войти</button>
-            </div>
-        `;
-        document.querySelector('.container').insertBefore(div, document.querySelector('.scoreboard'));
-
-        document.getElementById('createRoomBtn').addEventListener('click', () => {
-            game.onlineGame.createRoom();
-            div.remove();
-        });
-
-        document.getElementById('joinRoomBtn').addEventListener('click', () => {
-            const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
-            if (roomId) {
-                game.onlineGame.joinRoom(roomId);
-            }
-        });
-    });
-
     const originalHandleCellClick = game.handleCellClick.bind(game);
     game.handleCellClick = (e) => {
         e.preventDefault();
@@ -1170,6 +1383,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (game.mode === 'bot' && game.currentPlayer === 'O') return;
 
         if (game.mode === 'online') {
+            if (!game.onlineGame.isMyTurn) return;
             const index = parseInt(cell.dataset.index);
             game.onlineGame.makeMove(index);
         } else {
@@ -1185,4 +1399,26 @@ document.addEventListener('DOMContentLoaded', () => {
             originalResetGame();
         }
     };
+
+    const closeGameBtn = document.getElementById('closeGameBtn');
+    if (closeGameBtn) {
+        closeGameBtn.addEventListener('click', () => {
+            game.onlineUsersManager.closeGame();
+        });
+    }
+
+    const originalStartBotGame = game.onlineUsersManager.startBotGame.bind(game.onlineUsersManager);
+    game.onlineUsersManager.startBotGame = () => {
+        originalStartBotGame();
+        closeGameBtn.style.display = 'block';
+    };
+
+    const originalChallengeAccepted = game.onlineGame.socket.on;
+    game.onlineGame.socket.on('challengeAccepted', (data) => {
+        document.getElementById('gameContainer').style.display = 'block';
+        const sidePanel = document.getElementById('sidePanel');
+        sidePanel.classList.remove('fullscreen');
+        sidePanel.classList.add('in-game');
+        closeGameBtn.style.display = 'block';
+    });
 });

@@ -4,13 +4,42 @@ const { Server } = require('socket.io');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
+const cors = require('cors');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 
-app.use(express.static(__dirname));
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:3000'],
+    credentials: true
+}));
+// Статика React-приложения (собранного в tic-tac-toe-react/dist)
+const REACT_DIST = path.join(__dirname, 'tic-tac-toe-react', 'dist');
+const REACT_DIST_INDEX = path.join(REACT_DIST, 'index.html');
+const hasReactBuild = fs.existsSync(REACT_DIST_INDEX);
+
+if (hasReactBuild) {
+    app.use(express.static(REACT_DIST));
+} else {
+    console.warn('[Server] ВНИМАНИЕ: не найден tic-tac-toe-react/dist/index.html');
+    console.warn('[Server] Соберите фронтенд: cd tic-tac-toe-react && npm run build');
+}
+
 app.use(express.json());
+
+// Установка кодировки для JSON-ответов API
+app.use((req, res, next) => {
+    if (req.path.startsWith('/api')) {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    }
+    next();
+});
 
 const USERS_FILE = path.join(__dirname, 'users.json');
 const users = new Map();
@@ -191,11 +220,18 @@ app.get('/api/leaderboard', (req, res) => {
     res.json(leaderboard);
 });
 
+app.get('/api/chat-history', (req, res) => {
+    res.json(chatHistory);
+});
+
 app.get('/api/online', (req, res) => {
-    const onlineList = Array.from(onlineUsers.values()).map(u => ({
-        username: u.username,
-        rating: u.rating
-    }));
+    const onlineList = Array.from(onlineUsers.values()).map(u => {
+        const user = users.get(u.username);
+        return {
+            username: u.username,
+            rating: user?.rating || 1000
+        };
+    });
     res.json(onlineList);
 });
 
@@ -279,16 +315,21 @@ app.post('/api/challenge/send', (req, res) => {
     const session = sessions.get(token);
     const { targetUsername } = req.body;
 
+    console.log('[Server] challenge/send:', { from: session?.username, to: targetUsername });
+
     if (!session) {
+        console.log('[Server] challenge/send: unauthorized');
         return res.status(401).json({ error: 'Не авторизован' });
     }
 
     if (!onlineUsers.has(targetUsername)) {
+        console.log('[Server] challenge/send: target not online');
         return res.status(400).json({ error: 'Пользователь не в сети' });
     }
 
     for (const [roomId, room] of rooms.entries()) {
         if (room.players.some(p => p.username === targetUsername)) {
+            console.log('[Server] challenge/send: target already in game');
             return res.status(400).json({ error: 'Пользователь уже в игре' });
         }
     }
@@ -375,6 +416,8 @@ app.post('/api/challenge/decline', (req, res) => {
 });
 
 const rooms = new Map();
+const chatHistory = [];
+const MAX_CHAT_HISTORY = 100;
 
 function updatePlayerStats(username, result) {
     const user = users.get(username);
@@ -475,25 +518,29 @@ io.on('connection', (socket) => {
 
     socket.on('createRoom', (data, callback) => {
         const { username } = data || {};
+        console.log('[Server] createRoom:', { username, socketId: socket.id });
         const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
         const room = createRoom(roomId);
         room.players.push({ id: socket.id, symbol: 'X', username: username || 'X' });
         rooms.set(roomId, room);
         socket.join(roomId);
         callback({ success: true, roomId, symbol: 'X', username: username || 'X' });
-        console.log(`Комната создана: ${roomId} пользователем ${username || 'X'}`);
+        console.log(`[Server] Комната создана: ${roomId} пользователем ${username || 'X'}`);
     });
 
     socket.on('joinRoom', (roomId, data, callback) => {
         const { username } = data || {};
+        console.log('[Server] joinRoom:', { roomId, username, socketId: socket.id });
         const room = rooms.get(roomId);
 
         if (!room) {
+            console.log('[Server] joinRoom: room not found');
             callback({ success: false, error: 'Комната не найдена' });
             return;
         }
 
         if (room.players.length >= 2) {
+            console.log('[Server] joinRoom: room is full');
             callback({ success: false, error: 'Комната заполнена' });
             return;
         }
@@ -508,18 +555,29 @@ io.on('connection', (socket) => {
             players: room.players.map(p => p.username || p.symbol)
         });
 
-        console.log(`Игрок ${username || 'O'} присоединился к ${roomId}`);
+        console.log(`[Server] Игрок ${username || 'O'} присоединился к ${roomId}`);
     });
 
     socket.on('makeMove', (data) => {
         const { roomId, index } = data;
         const room = rooms.get(roomId);
 
-        if (!room || !room.gameActive) return;
+        console.log('[Server] makeMove:', { roomId, index, socketId: socket.id });
+
+        if (!room || !room.gameActive) {
+            console.log('[Server] makeMove blocked: room not found or game not active');
+            return;
+        }
 
         const player = room.players.find(p => p.id === socket.id);
-        if (!player || player.symbol !== room.currentPlayer) return;
-        if (room.board[index] !== '') return;
+        if (!player || player.symbol !== room.currentPlayer) {
+            console.log('[Server] makeMove blocked: not player turn', { playerSymbol: player?.symbol, currentPlayer: room.currentPlayer });
+            return;
+        }
+        if (room.board[index] !== '') {
+            console.log('[Server] makeMove blocked: cell already taken');
+            return;
+        }
 
         room.board[index] = room.currentPlayer;
 
@@ -591,29 +649,47 @@ io.on('connection', (socket) => {
 
         room.currentPlayer = room.currentPlayer === 'X' ? 'O' : 'X';
 
+        const players = room.players.map(p => ({
+            id: p.id,
+            symbol: p.symbol,
+            username: p.username || p.symbol
+        }));
+
         io.to(roomId).emit('gameUpdate', {
             board: room.board,
             currentPlayer: room.currentPlayer,
             winPattern: null,
             winner: null,
-            scores: room.scores
+            scores: room.scores,
+            players: players
         });
     });
 
     socket.on('playAgain', (roomId) => {
+        console.log('[Server] playAgain:', { roomId });
         const room = rooms.get(roomId);
-        if (!room) return;
+        if (!room) {
+            console.log('[Server] playAgain: room not found');
+            return;
+        }
 
         room.board = Array(9).fill('');
         room.currentPlayer = 'X';
         room.gameActive = true;
 
+        const players = room.players.map(p => ({
+            id: p.id,
+            symbol: p.symbol,
+            username: p.username || p.symbol
+        }));
+
         io.to(roomId).emit('gameUpdate', {
             board: room.board,
             currentPlayer: room.currentPlayer,
             winPattern: null,
             winner: null,
-            scores: room.scores
+            scores: room.scores,
+            players: players
         });
     });
 
@@ -638,11 +714,19 @@ io.on('connection', (socket) => {
         const player = Array.from(onlineUsers.values()).find(u => u.socketId === socket.id);
         if (!player) return;
 
-        io.emit('globalChatMessage', {
+        const message = {
             sender: player.username,
             text: text,
-            socketId: socket.id
-        });
+            socketId: socket.id,
+            timestamp: Date.now()
+        };
+
+        chatHistory.push(message);
+        if (chatHistory.length > MAX_CHAT_HISTORY) {
+            chatHistory.shift();
+        }
+
+        io.emit('globalChatMessage', message);
     });
 
     socket.on('disconnect', () => {
@@ -684,6 +768,18 @@ io.on('connection', (socket) => {
             }
         }
     });
+});
+
+// SPA fallback: любые не-API маршруты отдают index.html React-приложения
+app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+        return next();
+    }
+    if (!hasReactBuild) {
+        return res.status(503).type('text/plain; charset=utf-8')
+            .send('Фронтенд не собран. Выполните: cd tic-tac-toe-react && npm run build');
+    }
+    res.sendFile(REACT_DIST_INDEX);
 });
 
 const PORT = process.env.PORT || 3000;

@@ -1,0 +1,64 @@
+.scoreboard {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    gap: 10px;
+}
+
+.score {
+    flex: 1;
+    text-align: center;
+    padding: 10px;
+    border-radius: 10px;
+    background: var(--score-bg);
+    transition: all 0.3s ease;
+}
+
+.score .label {
+    display: block;
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+}
+
+.score .value {
+    font-size: 1.8em;
+    font-weight: bold;
+    color: var(--text-color);
+}
+
+.x-score {
+    background: var(--x-bg);
+}
+
+.x-score .value {
+    color: var(--x-color);
+}
+
+.o-score {
+    background: var(--o-bg);
+}
+
+.o-score .value {
+    color: var(--o-color);
+}
+
+.draw-score {
+    background: var(--draw-bg);
+}
+
+.draw-score .value {
+    color: var(--draw-color);
+}
+
+@media (max-width: 480px) {
+    .score {
+        padding: 6px;
+    }
+    .score .value {
+        font-size: 1.3em;
+    }
+    .score .label {
+        font-size: 0.7em;
+    }
+}

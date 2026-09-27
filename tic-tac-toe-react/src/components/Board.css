@@ -1,0 +1,68 @@
+.board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 20px;
+    aspect-ratio: 1;
+}
+
+.cell {
+    background: var(--cell-bg);
+    border: 3px solid var(--border-color);
+    border-radius: 15px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 3em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+    min-height: 80px;
+}
+
+.cell:hover:not(.taken) {
+    background: var(--cell-hover);
+    border-color: var(--text-muted);
+    transform: scale(1.02);
+}
+
+.cell.x {
+    color: var(--x-color);
+    border-color: var(--x-color);
+    background: var(--x-bg);
+}
+
+.cell.o {
+    color: var(--o-color);
+    border-color: var(--o-color);
+    background: var(--o-bg);
+}
+
+.cell.win {
+    background: var(--win-bg);
+    border-color: var(--win-color);
+    color: var(--win-color);
+    animation: celebrate 0.5s ease;
+}
+
+.cell.taken {
+    cursor: not-allowed;
+}
+
+@keyframes celebrate {
+    0%, 100% { transform: scale(1); }
+    25% { transform: scale(1.1) rotate(-5deg); }
+    75% { transform: scale(1.1) rotate(5deg); }
+}
+
+@media (max-width: 480px) {
+    .cell {
+        font-size: 2em;
+        border-radius: 10px;
+        min-height: 60px;
+    }
+    .board {
+        gap: 6px;
+    }
+}
