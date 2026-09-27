@@ -26,7 +26,11 @@ class MatchManager {
         this.io = io;
         this.hooks = hooks;
         this.matches = new Map();     // roomId -> Match
-        this.byPlayer = new Map();    // username -> roomId
+        this.byPlayer = new Map();    // username -> roomId (только идущий матч)
+        // username -> roomId последнего завершённого матча. Нужен для реванша:
+        // после финала игрок свободен (его можно вызвать заново), но комната
+        // предыдущего матча ещё помнит счёт
+        this.finishedByPlayer = new Map();
         this.strikes = new Map();     // username -> number of violations
         this.botTimers = new Map();   // roomId -> timeout
     }
@@ -65,7 +69,11 @@ class MatchManager {
             shouldPunish: (username) => this.shouldPunish(username)
         });
         this.matches.set(roomId, match);
-        for (const p of players) this.byPlayer.set(p.id, roomId);
+        for (const p of players) {
+            this.byPlayer.set(p.id, roomId);
+            // новый матч вытесняет предыдущий завершённый
+            this.finishedByPlayer.delete(p.id);
+        }
         return match;
     }
 
@@ -172,6 +180,17 @@ class MatchManager {
             this.hooks.onResult(winner, loser, snapshot.result);
         }
 
+        // Любой финал (в том числе отмена) освобождает игроков: список онлайна
+        // не должен показывать их занятыми, иначе их нельзя вызвать на игру.
+        // Матч при этом остаётся в памяти - из него делается реванш
+        for (const p of players) {
+            if (p.isBot) continue;
+            this.byPlayer.delete(p.id);
+            this.finishedByPlayer.set(p.id, roomId);
+        }
+
+        if (this.hooks.onFinish) this.hooks.onFinish(roomId, snapshot);
+
         const timer = setTimeout(() => this.dispose(roomId), CLEANUP_MS);
         if (timer.unref) timer.unref();
     }
@@ -179,7 +198,10 @@ class MatchManager {
     dispose(roomId) {
         const match = this.matches.get(roomId);
         if (!match) return;
-        for (const p of match.players) this.byPlayer.delete(p.id);
+        for (const p of match.players) {
+            this.byPlayer.delete(p.id);
+            this.finishedByPlayer.delete(p.id);
+        }
         this.matches.delete(roomId);
         const t = this.botTimers.get(roomId);
         if (t) clearTimeout(t);
@@ -203,8 +225,17 @@ class MatchManager {
         if (m) m.onReconnect(username);
     }
 
+    /** Комната идущего матча. null, если игрок свободен (в т.ч. после финала). */
     roomOf(username) {
         return this.byPlayer.get(username) || null;
+    }
+
+    /** Комната последнего завершённого матча - нужна для реванша. */
+    finishedRoomOf(username) {
+        const roomId = this.finishedByPlayer.get(username);
+        if (!roomId) return null;
+        // матч мог быть уже убран по таймеру - тогда реванш невозможен
+        return this.matches.has(roomId) ? roomId : null;
     }
 
     snapshotOf(roomId) {

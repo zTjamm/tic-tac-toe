@@ -370,21 +370,7 @@ app.post('/api/challenge/accept', (req, res) => {
     pendingChallenges.delete(challengeId);
 
     const opponent = challenge.from;
-    const { roomId } = matchManager.createHumanMatch(opponent, session.username);
-
-    for (const name of [opponent, session.username]) {
-        const sid = onlineUsers.get(name)?.socketId;
-        if (sid) io.sockets.sockets.get(sid)?.join(roomId);
-    }
-
-    // Оба получают состояние: матч сразу стартует с угадайки 1-го раунда
-    for (const name of [opponent, session.username]) {
-        const snap = matchManager.snapshotOf(roomId);
-        const sid = onlineUsers.get(name)?.socketId;
-        if (sid && snap) {
-            io.to(sid).emit('match:state', { type: 'sync', extra: null, snapshot: snap });
-        }
-    }
+    const roomId = startHumanMatch(opponent, session.username);
 
     res.json({ success: true, roomId });
 });
@@ -422,6 +408,9 @@ const MATCH_WIN_POINTS = 2;
 const MATCH_LOSS_POINTS = -1;
 
 const matchManager = new MatchManager(io, {
+    // Финал освобождает игроков - обновляем список онлайна, иначе в нём
+    // они останутся занятыми и их нельзя будет вызвать на новую игру
+    onFinish: () => broadcastOnline(),
     onResult: (winner, loser, result) => {
         if (winner && !winner.isBot) updatePlayerStats(winner.username, 'win');
         if (loser && !loser.isBot) updatePlayerStats(loser.username, 'loss');
@@ -447,6 +436,59 @@ function resolvePlayer(socketId) {
         return null;
     }
     return username;
+}
+
+// Список онлайна с рейтингом и признаком "занят матчем" - панели нужно
+// знать, кому можно предлагать игру
+function onlineList() {
+    const list = [];
+    for (const [username] of onlineUsers) {
+        const u = users.get(username);
+        list.push({
+            username,
+            rating: u ? u.rating : 1000,
+            inMatch: !!matchManager.roomOf(username)
+        });
+    }
+    return list;
+}
+
+function broadcastOnline() {
+    io.emit('onlineUsersUpdate', { online: onlineList() });
+}
+
+// Создаёт матч между двумя людьми, сажает оба сокета в комнату и
+// отправляет им состояние. Матч сразу стартует с угадайки 1-го раунда.
+// oldRoom - комната предыдущего матча: из неё надо выйти, иначе игрок
+// продолжит получать снимки того матча, который уже закончился.
+function startHumanMatch(a, b, oldRoom = null) {
+    // byPlayer смотрим до dispose: он очищает эти записи
+    const leave = new Set();
+    if (oldRoom) leave.add(oldRoom);
+    for (const name of [a, b]) {
+        for (const r of [matchManager.roomOf(name), matchManager.finishedRoomOf(name)]) {
+            if (r) leave.add(r);
+        }
+    }
+    if (oldRoom) matchManager.dispose(oldRoom);
+
+    const { roomId } = matchManager.createHumanMatch(a, b);
+    for (const name of [a, b]) {
+        const sid = onlineUsers.get(name)?.socketId;
+        const sock = sid ? io.sockets.sockets.get(sid) : null;
+        if (!sock) continue;
+        for (const r of leave) sock.leave(r);
+        sock.join(roomId);
+    }
+    const snap = matchManager.snapshotOf(roomId);
+    for (const name of [a, b]) {
+        const sid = onlineUsers.get(name)?.socketId;
+        if (sid && snap) {
+            io.to(sid).emit('match:state', { type: 'sync', extra: null, snapshot: snap });
+        }
+    }
+    broadcastOnline();
+    return roomId;
 }
 
 function updatePlayerStats(username, result) {
@@ -501,9 +543,7 @@ io.on('connection', (socket) => {
                     session.socketId = socket.id;
                 }
             });
-            io.emit('onlineUsersUpdate', {
-                online: Array.from(onlineUsers.keys())
-            });
+            broadcastOnline();
 
             // Вернулся в матч после обрыва: входим в комнату и получаем
             // оставшееся время на ход вместо отмены матча
@@ -519,9 +559,7 @@ io.on('connection', (socket) => {
         const { username } = data;
         if (username && onlineUsers.has(username)) {
             onlineUsers.delete(username);
-            io.emit('onlineUsersUpdate', {
-                online: Array.from(onlineUsers.keys())
-            });
+            broadcastOnline();
         }
     });
 
@@ -583,6 +621,67 @@ io.on('connection', (socket) => {
         if (snap) socket.emit('match:state', { type: 'sync', extra: null, snapshot: snap });
     });
 
+    /* ================ сетевой матч: вызов и реванш ================ */
+
+    socket.on('match:rematch', () => {
+        const username = usernameBySocket(socket.id);
+        if (!username) return;
+
+        // Реванш возможен только по завершённому матчу: в идущем игрок
+        // просто играет, а кнопки «Реванш» на экране нет
+        const roomId = matchManager.finishedRoomOf(username);
+        const snap = roomId ? matchManager.snapshotOf(roomId) : null;
+        if (!snap || snap.phase !== 'finished') {
+            // матч мог быть уже убран по таймеру очистки - сообщаем, чтобы
+            // кнопка не выглядела сломанной
+            socket.emit('rematchError', { message: 'Предыдущий матч уже недоступен' });
+            return;
+        }
+
+        const opponent = snap.players.find(p => p.id !== username && !p.isBot);
+        if (!opponent) return;
+
+        if (!onlineUsers.has(opponent.id)) {
+            socket.emit('rematchError', { message: 'Соперник не в сети' });
+            return;
+        }
+
+        const opponentSocket = onlineUsers.get(opponent.id)?.socketId;
+        if (opponentSocket) {
+            io.to(opponentSocket).emit('rematchRequested', { from: username });
+        }
+        socket.emit('rematchPending', { to: opponent.id });
+    });
+
+    socket.on('match:rematchResponse', (data) => {
+        const username = usernameBySocket(socket.id);
+        const { from, accept } = data || {};
+        if (!username || !from) return;
+
+        if (!accept) {
+            const sid = onlineUsers.get(from)?.socketId;
+            if (sid) io.to(sid).emit('rematchDeclined', { by: username });
+            return;
+        }
+
+        // Пока игрок думал над ответом, соперник мог уйти в другой матч
+        if (matchManager.roomOf(username) || matchManager.roomOf(from)) {
+            socket.emit('rematchError', { message: 'Кто-то уже играет' });
+            return;
+        }
+        if (!onlineUsers.has(from)) {
+            socket.emit('rematchError', { message: 'Соперник не в сети' });
+            return;
+        }
+
+        // Старый матч освобождаем, иначе byPlayer продолжит указывать на него
+        const oldRoom = matchManager.roomOf(username) ||
+            matchManager.finishedRoomOf(username);
+
+        startHumanMatch(from, username, oldRoom);
+        console.log(`[Match] реванш: ${from} и ${username}`);
+    });
+
     /* ============================ чат ============================ */
 
     // sendChatMessage (комнатный) удалён вместе с комнатами: чат один общий
@@ -621,9 +720,7 @@ io.on('connection', (socket) => {
 
         // Матч не отменяется сразу: у игрока есть время на переподключение
         matchManager.handleDisconnect(name);
-        io.emit('onlineUsersUpdate', {
-            online: Array.from(onlineUsers.keys())
-        });
+        broadcastOnline();
     });
 });
 
