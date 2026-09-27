@@ -2,8 +2,11 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 10px;
-    margin-bottom: 20px;
+    margin: 0 auto 20px;
     aspect-ratio: 1;
+    /* Доска не должна выталкивать кнопки за пределы экрана:
+       ограничиваем размер высотой вьюпорта. */
+    width: min(100%, 52vh);
 }
 
 .cell {

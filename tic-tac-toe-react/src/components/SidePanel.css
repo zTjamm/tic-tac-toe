@@ -1,8 +1,5 @@
 .side-panel {
-    flex: 1 1 340px;
-    max-width: 460px;
-    min-width: 0;
-    align-self: stretch;
+    width: 100%;
     max-height: calc(100vh - 40px);
     background: var(--container-bg);
     border-radius: 15px;
@@ -10,6 +7,18 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+}
+
+/* Когда игра открыта, панель занимает колонку рядом с доской */
+.app.with-game .side-panel {
+    flex: 1 1 340px;
+    max-width: 460px;
+    align-self: stretch;
+}
+
+/* До начала игры панель занимает весь экран — чату есть где расти */
+.app:not(.with-game) .side-panel {
+    min-height: calc(100vh - 70px);
 }
 
 .side-tabs {
@@ -172,17 +181,12 @@
 }
 
 /* Мобильные: панель под игрой, во всю ширину */
+/* Мобильные: панель под игрой, во всю ширину.
+   Правила для .app и .theme-toggle живут в App.css — здесь их быть не
+   должно, т.к. App.css подключается позже и перебил бы их порядком. */
 @media (max-width: 900px) {
-    .app {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .game-area {
-        max-width: 100%;
-    }
-
-    .side-panel {
+    .side-panel,
+    .app.with-game .side-panel {
         flex: 1 1 auto;
         max-width: 100%;
         max-height: none;

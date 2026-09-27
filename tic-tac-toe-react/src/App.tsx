@@ -13,7 +13,6 @@ const App: React.FC = () => {
     const [username, setUsername] = useState('');
     const [token, setToken] = useState<string | null>(null);
     const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
-    const [chatMessages, setChatMessages] = useState<Array<{ sender: string; text: string }>>([]);
     const [showGame, setShowGame] = useState(false);
 
     const game = useGame();
@@ -47,22 +46,11 @@ const App: React.FC = () => {
     }, [theme]);
 
     useEffect(() => {
-        if (onlineGame.isConnected) {
-            setOnlineUsers(prev => {
-                if (!prev.includes(username)) {
-                    return [...prev, username];
-                }
-                return prev;
-            });
+        // username пустой до входа — не добавляем "безымянного" игрока в список
+        if (onlineGame.isConnected && username) {
+            setOnlineUsers(prev => (prev.includes(username) ? prev : [...prev, username]));
         }
     }, [onlineGame.isConnected, username]);
-
-    useEffect(() => {
-        if (onlineGame.messages.length > 0) {
-            const latest = onlineGame.messages[onlineGame.messages.length - 1];
-            setChatMessages(prev => [...prev, { sender: latest.sender, text: latest.text }]);
-        }
-    }, [onlineGame.messages]);
 
     const handleLogin = (user: string, accessToken: string) => {
         setUsername(user);
@@ -95,7 +83,7 @@ const App: React.FC = () => {
     }
 
     return (
-        <div className="app">
+        <div className={`app ${showGame ? 'with-game' : ''}`}>
             <div className="theme-toggle">
                 <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
                     {theme === 'light' ? '🌙' : '☀️'}
@@ -132,7 +120,7 @@ const App: React.FC = () => {
             <SidePanel
                 username={username}
                 onlineUsers={onlineUsers}
-                chatMessages={chatMessages}
+                chatMessages={onlineGame.messages}
                 onStartBot={handleStartBot}
                 onSendChat={onlineGame.sendChatMessage}
                 onSendChallenge={onlineGame.sendChallenge}

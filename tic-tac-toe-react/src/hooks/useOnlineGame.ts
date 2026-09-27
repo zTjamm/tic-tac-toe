@@ -25,6 +25,26 @@ export const useOnlineGame = (
     });
     const socketRef = useRef<Socket | null>(null);
 
+    // Загружаем историю чата при подключении, чтобы сообщения не пропадали
+    // после перезагрузки страницы. endpoint относительный -> тот же origin.
+    const loadChatHistory = useCallback(async () => {
+        try {
+            const res = await fetch('/api/chat-history');
+            if (!res.ok) return;
+            const history: ChatMessage[] = await res.json();
+            if (!Array.isArray(history)) return;
+            setState(prev => {
+                const key = (m: ChatMessage) => `${m.sender}|${m.text}|${m.timestamp}`;
+                const known = new Set(history.map(key));
+                // Сообщения, пришедшие пока летел запрос, не теряем
+                const extra = prev.messages.filter(m => !known.has(key(m)));
+                return { ...prev, messages: [...history, ...extra] };
+            });
+        } catch (err) {
+            console.warn('[Chat] не удалось загрузить историю:', err);
+        }
+    }, []);
+
     useEffect(() => {
         // Пустой URL -> подключение к текущему origin (тот же сервер, что отдал страницу)
         const socket = io(serverUrl || undefined);
@@ -34,6 +54,7 @@ export const useOnlineGame = (
             console.log('[Socket] Подключено к серверу');
             setState(prev => ({ ...prev, isConnected: true }));
             socket.emit('userOnline', { username });
+            loadChatHistory();
         });
 
         socket.on('disconnect', () => {
@@ -106,7 +127,7 @@ export const useOnlineGame = (
         return () => {
             socket.disconnect();
         };
-    }, [serverUrl, username]);
+    }, [serverUrl, username, loadChatHistory]);
 
     const createRoom = useCallback(() => {
         if (!socketRef.current) return;
