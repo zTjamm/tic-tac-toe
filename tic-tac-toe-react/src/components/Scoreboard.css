@@ -1,7 +1,16 @@
 .scoreboard {
+    margin-bottom: 16px;
+}
+
+.scoreboard-round {
+    text-align: center;
+    font-size: 0.85em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.scoreboard-players {
     display: flex;
-    justify-content: space-between;
-    margin-bottom: 20px;
     gap: 10px;
 }
 
@@ -11,44 +20,76 @@
     padding: 10px;
     border-radius: 10px;
     background: var(--score-bg);
+    border: 2px solid transparent;
     transition: all 0.3s ease;
+    position: relative;
+}
+
+.score-x {
+    background: var(--x-bg);
+}
+
+.score-o {
+    background: var(--o-bg);
+}
+
+/* Свой счёт выделяем рамкой */
+.score.is-me {
+    border-color: var(--accent);
+}
+
+.score .mark {
+    display: block;
+    font-size: 1.2em;
+    font-weight: bold;
+    line-height: 1.1;
+}
+
+.score-x .mark {
+    color: var(--x-color);
+}
+
+.score-o .mark {
+    color: var(--o-color);
 }
 
 .score .label {
     display: block;
-    font-size: 0.85em;
+    font-size: 0.75em;
     color: var(--text-muted);
-    margin-bottom: 5px;
+    margin: 4px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .score .value {
-    font-size: 1.8em;
+    font-size: 1.7em;
     font-weight: bold;
     color: var(--text-color);
+    line-height: 1;
 }
 
-.x-score {
-    background: var(--x-bg);
-}
-
-.x-score .value {
+.score-x .value {
     color: var(--x-color);
 }
 
-.o-score {
-    background: var(--o-bg);
-}
-
-.o-score .value {
+.score-o .value {
     color: var(--o-color);
 }
 
-.draw-score {
-    background: var(--draw-bg);
+.score .offline {
+    display: block;
+    font-size: 0.65em;
+    color: var(--draw-color);
+    margin-top: 4px;
 }
 
-.draw-score .value {
-    color: var(--draw-color);
+.scoreboard-hint {
+    text-align: center;
+    font-size: 0.8em;
+    color: var(--text-muted);
+    margin-top: 8px;
 }
 
 @media (max-width: 480px) {
@@ -56,9 +97,9 @@
         padding: 6px;
     }
     .score .value {
-        font-size: 1.3em;
+        font-size: 1.5em;
     }
     .score .label {
-        font-size: 0.7em;
+        font-size: 0.65em;
     }
 }

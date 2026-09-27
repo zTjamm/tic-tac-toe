@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { useGame } from './hooks/useGame';
-import { useOnlineGame } from './hooks/useOnlineGame';
+import React, { useEffect, useState } from 'react';
+import { useMatch } from './hooks/useMatch';
 import Board from './components/Board';
 import Scoreboard from './components/Scoreboard';
+import Countdown from './components/Countdown';
+import MatchResult from './components/MatchResult';
 import AuthModal from './components/AuthModal';
 import SidePanel from './components/SidePanel';
 import './App.css';
@@ -11,20 +12,26 @@ const App: React.FC = () => {
     const [theme, setTheme] = useState<'light' | 'dark'>('light');
     const [showAuth, setShowAuth] = useState(true);
     const [username, setUsername] = useState('');
-    const [token, setToken] = useState<string | null>(null);
-    const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
-    const [showGame, setShowGame] = useState(false);
+    const [token, setToken] = useState<string>('');
 
-    const game = useGame();
-    // Пустая строка = тот же origin, что и страница (порт 3000)
-    const onlineGame = useOnlineGame('', username);
+    const match = useMatch(username);
+    const { snapshot, startBotMatch, syncMatch, pickNumber, chooseRole, makeMove, clearMatch } =
+        match;
+
+    // Мой id внутри матча равен нику
+    const myId = username || null;
 
     useEffect(() => {
         const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
         if (savedTheme) setTheme(savedTheme);
     }, []);
 
-    // Восстанавливаем сессию после перезагрузки страницы
+    useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }, [theme]);
+
+    // Восстанавливаем сессию после перезагрузки
     useEffect(() => {
         const savedToken = localStorage.getItem('token');
         const savedUser = localStorage.getItem('username');
@@ -40,17 +47,11 @@ const App: React.FC = () => {
         if (username) localStorage.setItem('username', username);
     }, [token, username]);
 
+    // Вернулись на страницу во время матча - забираем состояние
     useEffect(() => {
-        document.documentElement.setAttribute('data-theme', theme);
-        localStorage.setItem('theme', theme);
-    }, [theme]);
-
-    useEffect(() => {
-        // username пустой до входа — не добавляем "безымянного" игрока в список
-        if (onlineGame.isConnected && username) {
-            setOnlineUsers(prev => (prev.includes(username) ? prev : [...prev, username]));
-        }
-    }, [onlineGame.isConnected, username]);
+        if (showAuth) return;
+        syncMatch();
+    }, [showAuth, syncMatch]);
 
     const handleLogin = (user: string, accessToken: string) => {
         setUsername(user);
@@ -58,25 +59,31 @@ const App: React.FC = () => {
         setShowAuth(false);
     };
 
-    const handleStartBot = () => {
-        game.setGameMode('bot');
-        game.setPlayerNames({ X: username || 'Игрок', O: 'Бот' });
-        setShowGame(true);
+    const handleLogout = () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+        setToken('');
+        setUsername('');
+        setShowAuth(true);
     };
 
-    const handleCellClick = (index: number) => {
-        if (game.mode === 'bot' && game.currentPlayer === 'O') return;
-        if (game.mode === 'online') {
-            onlineGame.makeMove(index);
+    // Реванш: для матча с ботом это просто новый матч. Сетевой реванш
+    // требует вызова сопернику - он пока не реализован.
+    const handleRematch = () => {
+        if (!snapshot) return;
+        // Считаем именно двух живых игроков: сам игрок тоже не бот,
+        // поэтому some(p => !p.isBot) всегда истинно.
+        const humans = snapshot.players.filter(p => !p.isBot).length;
+        if (humans > 1) {
+            // пока сетевой реванш не реализован - честно говорим об этом
+            window.alert('Реванш по сети скоро появится. Пока можно сыграть с ботом.');
             return;
         }
-        game.makeMove(index);
+        startBotMatch();
     };
 
-    const handleCloseGame = () => {
-        setShowGame(false);
-        game.resetGame();
-    };
+    const inMatch = !!snapshot && snapshot.phase !== 'finished';
+    const showGame = !!snapshot;
 
     if (showAuth) {
         return <AuthModal onLogin={handleLogin} />;
@@ -84,49 +91,102 @@ const App: React.FC = () => {
 
     return (
         <div className={`app ${showGame ? 'with-game' : ''}`}>
-            <div className="theme-toggle">
-                <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
-                    {theme === 'light' ? '🌙' : '☀️'}
-                </button>
-            </div>
+            <TopBar
+                username={username}
+                theme={theme}
+                canStart={!inMatch && match.connected}
+                onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+                onStartBot={startBotMatch}
+                onLogout={handleLogout}
+            />
 
             {showGame && (
                 <div className="game-area">
                     <div className="container">
-                    <h1>Крестики-нолики</h1>
-                    <Scoreboard
-                        scores={game.scores}
-                        labelX={`Игрок X (${game.playerNames.X})`}
-                        labelO={`Игрок O (${game.playerNames.O})`}
-                    />
-                    <div className={`status ${game.gameActive ? `${game.currentPlayer.toLowerCase()}-turn` : ''}`}>
-                        {game.gameActive ? `Ход: ${game.currentPlayer} (${game.playerNames[game.currentPlayer]})` : 'Игра окончена'}
-                    </div>
-                    <Board
-                        board={game.board}
-                        onCellClick={handleCellClick}
-                        disabled={!game.gameActive || (game.mode === 'bot' && game.currentPlayer === 'O')}
-                        winPattern={game.winPattern}
-                    />
-                    <div className="controls">
-                        <button className="btn" onClick={game.resetGame}>Новая игра</button>
-                        <button className="btn" onClick={game.resetScore}>Сбросить счёт</button>
-                        <button className="btn" onClick={handleCloseGame}>Закрыть игру</button>
-                    </div>
+                        <Scoreboard snapshot={snapshot} myId={myId} />
+                        <Countdown
+                            snapshot={snapshot}
+                            myId={myId}
+                            onChooseRole={chooseRole}
+                        />
+                        {/* Итог показываем над доской: кнопки реванша и выхода
+                            должны быть видны без прокрутки, доска нужна лишь
+                            как запись последнего раунда */}
+                        {snapshot.phase === 'finished' && (
+                            <MatchResult
+                                snapshot={snapshot}
+                                myId={myId}
+                                canRematch={match.connected}
+                                onRematch={handleRematch}
+                                onExit={clearMatch}
+                            />
+                        )}
+
+                        <Board
+                            snapshot={snapshot}
+                            myId={myId}
+                            onPickNumber={pickNumber}
+                            onMove={makeMove}
+                        />
                     </div>
                 </div>
             )}
 
             <SidePanel
                 username={username}
-                onlineUsers={onlineUsers}
-                chatMessages={onlineGame.messages}
-                onStartBot={handleStartBot}
-                onSendChat={onlineGame.sendChatMessage}
-                onSendChallenge={onlineGame.sendChallenge}
+                chatMessages={match.messages}
+                connected={match.connected}
+                onSendChat={match.sendChat}
             />
         </div>
     );
 };
+
+interface TopBarProps {
+    username: string;
+    theme: 'light' | 'dark';
+    canStart: boolean;
+    onToggleTheme: () => void;
+    onStartBot: () => void;
+    onLogout: () => void;
+}
+
+const TopBar: React.FC<TopBarProps> = ({
+    username,
+    theme,
+    canStart,
+    onToggleTheme,
+    onStartBot,
+    onLogout
+}) => (
+    <div className="top-bar">
+        <span className="top-bar-title">Крестики-нолики</span>
+        <div className="top-bar-actions">
+            <button className="btn btn-top" onClick={onStartBot} disabled={!canStart}>
+                Игра против бота
+            </button>
+            <button
+                className="btn btn-top btn-icon"
+                onClick={onToggleTheme}
+                title="Сменить тему"
+            >
+                {theme === 'light' ? '🌙' : '☀️'}
+            </button>
+            <button
+                className="btn btn-top btn-logout"
+                onClick={onLogout}
+                disabled={!canStart}
+                title={
+                    canStart
+                        ? 'Выйти из аккаунта'
+                        : 'Нельзя выйти во время матча или без связи с сервером'
+                }
+            >
+                Выход
+            </button>
+        </div>
+        <span className="top-bar-user">{username}</span>
+    </div>
+);
 
 export default App;

@@ -5,8 +5,15 @@
     margin: 0 auto 20px;
     aspect-ratio: 1;
     /* Доска не должна выталкивать кнопки за пределы экрана:
-       ограничиваем размер высотой вьюпорта. */
-    width: min(100%, 52vh);
+       45vh оставляет место под верхнюю панель, табло и отсчёт. */
+    width: min(100%, 45vh);
+}
+
+/* После финала доска нужна только как запись, поэтому ужимается -
+   иначе панель результата с кнопками уходит под сгиб экрана. */
+.board-finished {
+    width: min(100%, 30vh);
+    margin-bottom: 12px;
 }
 
 .cell {
@@ -51,6 +58,78 @@
 
 .cell.taken {
     cursor: not-allowed;
+}
+
+/* ===================== режим угадайки: числа на доске ===================== */
+
+.board-guessing .cell {
+    cursor: pointer;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 1.6em;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--cell-bg);
+    border-style: dashed;
+    border-width: 2px;
+}
+
+.board-guessing .cell.taken {
+    cursor: default;
+}
+
+.cell-num {
+    line-height: 1;
+    font-size: 1.5em;
+}
+
+/* Выбор соперника - другим цветом, свой - своим */
+.cell-number.pick-mine {
+    border-style: solid;
+    border-color: var(--accent);
+    background: var(--x-bg);
+    color: var(--x-color);
+}
+
+.cell-number.pick-theirs {
+    border-style: solid;
+    border-color: var(--o-color);
+    background: var(--o-bg);
+    color: var(--o-color);
+}
+
+.cell-pick-owner {
+    font-size: 0.32em;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    opacity: 0.85;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Победитель угадайки получает рамку, ему выбирать роль */
+.cell-pick-owner.is-winner {
+    opacity: 1;
+    font-weight: 700;
+}
+
+.cell-number.pick-mine .cell-pick-owner.is-winner,
+.cell-number.pick-theirs .cell-pick-owner.is-winner {
+    text-decoration: underline;
+}
+
+/* Системное число в клетке подсвечивается ярче */
+.cell-number.revealed {
+    border-color: var(--win-color);
+    background: var(--win-bg);
+    color: var(--win-color);
+}
+
+.board-empty .cell {
+    background: transparent;
+    border-color: transparent;
 }
 
 @keyframes celebrate {

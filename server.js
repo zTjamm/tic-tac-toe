@@ -5,6 +5,8 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const cors = require('cors');
+const { MatchManager } = require('./match-manager');
+const { STRIKE_LIMIT } = require('./match');
 
 const app = express();
 const server = http.createServer(app);
@@ -327,11 +329,10 @@ app.post('/api/challenge/send', (req, res) => {
         return res.status(400).json({ error: 'Пользователь не в сети' });
     }
 
-    for (const [roomId, room] of rooms.entries()) {
-        if (room.players.some(p => p.username === targetUsername)) {
-            console.log('[Server] challenge/send: target already in game');
-            return res.status(400).json({ error: 'Пользователь уже в игре' });
-        }
+    // Нельзя вызвать того, кто уже в матче
+    if (matchManager.roomOf(targetUsername)) {
+        console.log('[Server] challenge/send: target already in match');
+        return res.status(400).json({ error: 'Пользователь уже в игре' });
     }
 
     const challengeId = generateToken();
@@ -368,24 +369,21 @@ app.post('/api/challenge/accept', (req, res) => {
 
     pendingChallenges.delete(challengeId);
 
-    const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const room = createRoom(roomId);
-    room.players.push(
-        { id: onlineUsers.get(challenge.from)?.socketId, symbol: 'X', username: challenge.from },
-        { id: onlineUsers.get(challenge.to)?.socketId, symbol: 'O', username: session.username }
-    );
-    rooms.set(roomId, room);
+    const opponent = challenge.from;
+    const { roomId } = matchManager.createHumanMatch(opponent, session.username);
 
-    const fromSocket = onlineUsers.get(challenge.from)?.socketId;
-    const toSocket = onlineUsers.get(challenge.to)?.socketId;
-
-    if (fromSocket) {
-        io.sockets.sockets.get(fromSocket)?.join(roomId);
-        io.to(fromSocket).emit('challengeAccepted', { roomId, symbol: 'X', opponent: session.username });
+    for (const name of [opponent, session.username]) {
+        const sid = onlineUsers.get(name)?.socketId;
+        if (sid) io.sockets.sockets.get(sid)?.join(roomId);
     }
-    if (toSocket) {
-        io.sockets.sockets.get(toSocket)?.join(roomId);
-        io.to(toSocket).emit('challengeAccepted', { roomId, symbol: 'O', opponent: challenge.from });
+
+    // Оба получают состояние: матч сразу стартует с угадайки 1-го раунда
+    for (const name of [opponent, session.username]) {
+        const snap = matchManager.snapshotOf(roomId);
+        const sid = onlineUsers.get(name)?.socketId;
+        if (sid && snap) {
+            io.to(sid).emit('match:state', { type: 'sync', extra: null, snapshot: snap });
+        }
     }
 
     res.json({ success: true, roomId });
@@ -415,9 +413,41 @@ app.post('/api/challenge/decline', (req, res) => {
     res.json({ success: true });
 });
 
-const rooms = new Map();
 const chatHistory = [];
 const MAX_CHAT_HISTORY = 100;
+
+// Рейтинг по итогам матча: победа +2, поражение -1. Формулу с учётом разницы
+// рейтингов участников ещё предстоит обсудить, поэтому пока плоская.
+const MATCH_WIN_POINTS = 2;
+const MATCH_LOSS_POINTS = -1;
+
+const matchManager = new MatchManager(io, {
+    onResult: (winner, loser, result) => {
+        if (winner && !winner.isBot) updatePlayerStats(winner.username, 'win');
+        if (loser && !loser.isBot) updatePlayerStats(loser.username, 'loss');
+        console.log(`[Match] матч окончен: ${result.reason || 'score'}, победил ${winner ? winner.username : '-'}`);
+    }
+});
+
+// Ник, объявленный сокетом. Нужен отдельно onlineUsers: там запись может
+// ещё не появиться (или уже быть удалена другим сокетом), и обработчики
+// матча тогда молча выходили бы.
+const socketUsernames = new Map();
+
+function usernameBySocket(socketId) {
+    return socketUsernames.get(socketId) || null;
+}
+
+// Игрок, с которым сервер реально готов работать: ник известен и существует
+function resolvePlayer(socketId) {
+    const username = usernameBySocket(socketId);
+    if (!username) return null;
+    if (!users.has(username)) {
+        console.warn(`[Match] неизвестный игрок "${username}" с сокета ${socketId}`);
+        return null;
+    }
+    return username;
+}
 
 function updatePlayerStats(username, result) {
     const user = users.get(username);
@@ -427,11 +457,13 @@ function updatePlayerStats(username, result) {
         user.wins++;
         user.streak++;
         user.maxStreak = Math.max(user.maxStreak, user.streak);
-        user.rating += user.streak >= 4 ? 3 : 2;
+        // TODO: здесь будет формула с учётом разницы рейтингов участников
+        user.rating += MATCH_WIN_POINTS;
     } else if (result === 'loss') {
         user.losses++;
         user.streak = 0;
-        user.rating = Math.max(0, user.rating - 1);
+        // Дельты складываются: MATCH_LOSS_POINTS = -1, поэтому rating уменьшается
+        user.rating = Math.max(0, user.rating + MATCH_LOSS_POINTS);
     } else {
         user.draws++;
         user.streak = 0;
@@ -449,45 +481,14 @@ function updatePlayerStats(username, result) {
     saveUsers();
 }
 
-function createRoom(roomId) {
-    return {
-        id: roomId,
-        board: Array(9).fill(''),
-        players: [],
-        currentPlayer: 'X',
-        gameActive: true,
-        scores: { X: 0, O: 0, Draw: 0 },
-        winPatterns: [
-            [0, 1, 2], [3, 4, 5], [6, 7, 8],
-            [0, 3, 6], [1, 4, 7], [2, 5, 8],
-            [0, 4, 8], [2, 4, 6]
-        ]
-    };
-}
-
-function checkWinFor(board, player, winPatterns) {
-    return winPatterns.some(pattern => {
-        const [a, b, c] = pattern;
-        return board[a] === player &&
-               board[b] === player &&
-               board[c] === player;
-    });
-}
-
-function getWinPattern(board, player, winPatterns) {
-    return winPatterns.find(pattern => {
-        const [a, b, c] = pattern;
-        return board[a] === player &&
-               board[b] === player &&
-               board[c] === player;
-    });
-}
-
 io.on('connection', (socket) => {
     console.log(`Подключился: ${socket.id}`);
 
     socket.on('userOnline', (data) => {
         const { username } = data;
+        if (username) {
+            socketUsernames.set(socket.id, username);
+        }
         if (username && users.has(username)) {
             const user = users.get(username);
             onlineUsers.set(username, {
@@ -503,6 +504,14 @@ io.on('connection', (socket) => {
             io.emit('onlineUsersUpdate', {
                 online: Array.from(onlineUsers.keys())
             });
+
+            // Вернулся в матч после обрыва: входим в комнату и получаем
+            // оставшееся время на ход вместо отмены матча
+            const roomId = matchManager.roomOf(username);
+            if (roomId) {
+                socket.join(roomId);
+                matchManager.handleReconnect(username);
+            }
         }
     });
 
@@ -516,199 +525,67 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('createRoom', (data, callback) => {
-        const { username } = data || {};
-        console.log('[Server] createRoom:', { username, socketId: socket.id });
-        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const room = createRoom(roomId);
-        room.players.push({ id: socket.id, symbol: 'X', username: username || 'X' });
-        rooms.set(roomId, room);
-        socket.join(roomId);
-        callback({ success: true, roomId, symbol: 'X', username: username || 'X' });
-        console.log(`[Server] Комната создана: ${roomId} пользователем ${username || 'X'}`);
-    });
+    /* ================= матч: создание и действия ================= */
 
-    socket.on('joinRoom', (roomId, data, callback) => {
-        const { username } = data || {};
-        console.log('[Server] joinRoom:', { roomId, username, socketId: socket.id });
-        const room = rooms.get(roomId);
-
-        if (!room) {
-            console.log('[Server] joinRoom: room not found');
-            callback({ success: false, error: 'Комната не найдена' });
-            return;
-        }
-
-        if (room.players.length >= 2) {
-            console.log('[Server] joinRoom: room is full');
-            callback({ success: false, error: 'Комната заполнена' });
-            return;
-        }
-
-        room.players.push({ id: socket.id, symbol: 'O', username: username || 'O' });
-        socket.join(roomId);
-        callback({ success: true, roomId, symbol: 'O', username: username || 'O' });
-
-        io.to(roomId).emit('gameStart', {
-            board: room.board,
-            currentPlayer: room.currentPlayer,
-            players: room.players.map(p => p.username || p.symbol)
-        });
-
-        console.log(`[Server] Игрок ${username || 'O'} присоединился к ${roomId}`);
-    });
-
-    socket.on('makeMove', (data) => {
-        const { roomId, index } = data;
-        const room = rooms.get(roomId);
-
-        console.log('[Server] makeMove:', { roomId, index, socketId: socket.id });
-
-        if (!room || !room.gameActive) {
-            console.log('[Server] makeMove blocked: room not found or game not active');
-            return;
-        }
-
-        const player = room.players.find(p => p.id === socket.id);
-        if (!player || player.symbol !== room.currentPlayer) {
-            console.log('[Server] makeMove blocked: not player turn', { playerSymbol: player?.symbol, currentPlayer: room.currentPlayer });
-            return;
-        }
-        if (room.board[index] !== '') {
-            console.log('[Server] makeMove blocked: cell already taken');
-            return;
-        }
-
-        room.board[index] = room.currentPlayer;
-
-        const winPattern = checkWinFor(room.board, room.currentPlayer, room.winPatterns);
-
-        if (winPattern) {
-            room.gameActive = false;
-            room.scores[room.currentPlayer]++;
-
-            const players = room.players.map(p => ({
-                id: p.id,
-                symbol: p.symbol,
-                username: p.username || p.symbol
-            }));
-
-            const winnerPlayer = players.find(p => p.symbol === room.currentPlayer);
-            const loserPlayer = players.find(p => p.symbol !== room.currentPlayer);
-
-            if (winnerPlayer && loserPlayer) {
-                updatePlayerStats(winnerPlayer.username, 'win');
-                updatePlayerStats(loserPlayer.username, 'loss');
+    socket.on('match:startBot', () => {
+        const username = resolvePlayer(socket.id);
+        if (!username) return;
+        // Игрок не может быть в двух матчах одновременно
+        const existing = matchManager.roomOf(username);
+        if (existing) {
+            const snap = matchManager.snapshotOf(existing);
+            if (snap && snap.phase !== 'finished') {
+                socket.join(existing);
+                socket.emit('match:state', { type: 'sync', extra: null, snapshot: snap });
+                return;
             }
-
-            io.to(roomId).emit('gameUpdate', {
-                board: room.board,
-                currentPlayer: room.currentPlayer,
-                winPattern,
-                winner: room.currentPlayer,
-                scores: room.scores,
-                players: players
-            });
-
-            setTimeout(() => {
-                rooms.delete(roomId);
-                console.log(`Комната удалена после игры: ${roomId}`);
-            }, 60000);
-
-            return;
+            matchManager.dispose(existing);
         }
 
-        if (room.board.every(c => c !== '')) {
-            room.gameActive = false;
-            room.scores.Draw++;
-
-            const players = room.players.map(p => ({
-                id: p.id,
-                symbol: p.symbol,
-                username: p.username || p.symbol
-            }));
-
-            players.forEach(p => updatePlayerStats(p.username, 'draw'));
-
-            io.to(roomId).emit('gameUpdate', {
-                board: room.board,
-                currentPlayer: null,
-                winPattern: null,
-                winner: 'draw',
-                scores: room.scores,
-                players: players
-            });
-
-            setTimeout(() => {
-                rooms.delete(roomId);
-                console.log(`Комната удалена после игры: ${roomId}`);
-            }, 60000);
-
-            return;
-        }
-
-        room.currentPlayer = room.currentPlayer === 'X' ? 'O' : 'X';
-
-        const players = room.players.map(p => ({
-            id: p.id,
-            symbol: p.symbol,
-            username: p.username || p.symbol
-        }));
-
-        io.to(roomId).emit('gameUpdate', {
-            board: room.board,
-            currentPlayer: room.currentPlayer,
-            winPattern: null,
-            winner: null,
-            scores: room.scores,
-            players: players
-        });
+        const { roomId } = matchManager.createBotMatch(username);
+        socket.join(roomId);
+        // Первое состояние уходит в broadcast до того, как сокет вошёл в
+        // комнату, поэтому шлём снимок явно - иначе клиент ничего не увидит
+        // до следующего события (через 5 секунд отсчёта).
+        const snap = matchManager.snapshotOf(roomId);
+        if (snap) socket.emit('match:state', { type: 'sync', extra: null, snapshot: snap });
+        console.log(`[Match] бот-матч ${roomId}: ${username}`);
     });
 
-    socket.on('playAgain', (roomId) => {
-        console.log('[Server] playAgain:', { roomId });
-        const room = rooms.get(roomId);
-        if (!room) {
-            console.log('[Server] playAgain: room not found');
-            return;
-        }
-
-        room.board = Array(9).fill('');
-        room.currentPlayer = 'X';
-        room.gameActive = true;
-
-        const players = room.players.map(p => ({
-            id: p.id,
-            symbol: p.symbol,
-            username: p.username || p.symbol
-        }));
-
-        io.to(roomId).emit('gameUpdate', {
-            board: room.board,
-            currentPlayer: room.currentPlayer,
-            winPattern: null,
-            winner: null,
-            scores: room.scores,
-            players: players
-        });
+    socket.on('match:pick', (data) => {
+        const username = usernameBySocket(socket.id);
+        const { roomId, cell } = data || {};
+        if (!username || !roomId) return;
+        matchManager.pick(roomId, username, cell);
     });
 
-    socket.on('sendChatMessage', (data) => {
-        const { roomId, text } = data;
-        const room = rooms.get(roomId);
-        if (!room) return;
-
-        const player = room.players.find(p => p.id === socket.id);
-        if (!player) return;
-
-        io.to(roomId).emit('chatMessage', {
-            sender: player.username || player.symbol,
-            text: text,
-            isOwn: false,
-            socketId: socket.id
-        });
+    socket.on('match:role', (data) => {
+        const username = usernameBySocket(socket.id);
+        const { roomId, attack } = data || {};
+        if (!username || !roomId) return;
+        matchManager.chooseRole(roomId, username, attack);
     });
 
+    socket.on('match:move', (data) => {
+        const username = usernameBySocket(socket.id);
+        const { roomId, cell } = data || {};
+        if (!username || !roomId) return;
+        matchManager.move(roomId, username, cell);
+    });
+
+    socket.on('match:sync', () => {
+        const username = usernameBySocket(socket.id);
+        if (!username) return;
+        const roomId = matchManager.roomOf(username);
+        if (!roomId) return;
+        socket.join(roomId);
+        const snap = matchManager.snapshotOf(roomId);
+        if (snap) socket.emit('match:state', { type: 'sync', extra: null, snapshot: snap });
+    });
+
+    /* ============================ чат ============================ */
+
+    // sendChatMessage (комнатный) удалён вместе с комнатами: чат один общий
     socket.on('sendGlobalChat', (data) => {
         const { text } = data;
         const player = Array.from(onlineUsers.values()).find(u => u.socketId === socket.id);
@@ -731,42 +608,22 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         console.log(`Отключился: ${socket.id}`);
+        const name = socketUsernames.get(socket.id);
+        socketUsernames.delete(socket.id);
+        if (!name) return;
 
-        for (const [username, data] of onlineUsers.entries()) {
-            if (data.socketId === socket.id) {
-                onlineUsers.delete(username);
-                io.emit('onlineUsersUpdate', {
-                    online: Array.from(onlineUsers.keys())
-                });
-                break;
-            }
+        // Удаляем из онлайна только если запись всё ещё указывает на этот сокет:
+        // игрок мог открыть вторую вкладку и уже перерегистрироваться
+        const entry = onlineUsers.get(name);
+        if (entry && entry.socketId === socket.id) {
+            onlineUsers.delete(name);
         }
 
-        for (const [roomId, room] of rooms.entries()) {
-            const playerIndex = room.players.findIndex(p => p.id === socket.id);
-            if (playerIndex !== -1) {
-                const symbol = room.players[playerIndex].symbol;
-                room.players.splice(playerIndex, 1);
-
-                if (room.players.length === 0) {
-                    rooms.delete(roomId);
-                    console.log(`Комната удалена: ${roomId}`);
-                } else {
-                    io.to(roomId).emit('playerLeft', { symbol });
-                    room.board = Array(9).fill('');
-                    room.currentPlayer = 'X';
-                    room.gameActive = false;
-                    io.to(roomId).emit('gameUpdate', {
-                        board: room.board,
-                        currentPlayer: null,
-                        winPattern: null,
-                        winner: null,
-                        scores: room.scores
-                    });
-                }
-                break;
-            }
-        }
+        // Матч не отменяется сразу: у игрока есть время на переподключение
+        matchManager.handleDisconnect(name);
+        io.emit('onlineUsersUpdate', {
+            online: Array.from(onlineUsers.keys())
+        });
     });
 });
 

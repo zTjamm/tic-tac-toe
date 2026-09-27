@@ -1,28 +1,29 @@
 import React, { useState } from 'react';
+import type { ChatMessage } from '../types';
 import './SidePanel.css';
 
 interface SidePanelProps {
     username: string;
-    onlineUsers: string[];
-    chatMessages: Array<{ sender: string; text: string }>;
-    onStartBot: () => void;
+    chatMessages: ChatMessage[];
+    connected: boolean;
     onSendChat: (text: string) => void;
-    onSendChallenge: (targetUsername: string) => void;
 }
+
+type Tab = 'online' | 'friends' | 'rating';
 
 const SidePanel: React.FC<SidePanelProps> = ({
     username,
-    onlineUsers,
     chatMessages,
-    onStartBot,
-    onSendChat,
+    connected,
+    onSendChat
 }) => {
-    const [activeTab, setActiveTab] = useState<'online' | 'friends' | 'leaderboard'>('online');
+    const [activeTab, setActiveTab] = useState<Tab>('online');
     const [chatInput, setChatInput] = useState('');
 
     const handleSendChat = () => {
-        if (chatInput.trim()) {
-            onSendChat(chatInput.trim());
+        const text = chatInput.trim();
+        if (text) {
+            onSendChat(text);
             setChatInput('');
         }
     };
@@ -43,71 +44,79 @@ const SidePanel: React.FC<SidePanelProps> = ({
                     Друзья
                 </button>
                 <button
-                    className={`side-tab ${activeTab === 'leaderboard' ? 'active' : ''}`}
-                    onClick={() => setActiveTab('leaderboard')}
+                    className={`side-tab ${activeTab === 'rating' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('rating')}
                 >
                     Рейтинг
                 </button>
             </div>
 
-            <div className="side-content">
-                {activeTab === 'online' && (
-                    <div className="online-section">
-                        <div className="online-header">
-                            <span>Онлайн: {onlineUsers.length}</span>
+            {/* Чат показывается только на вкладке Онлайн: на остальных
+                он занимает правую колонку и мешал бы списку */}
+            <div className={`side-body ${activeTab === 'online' ? '' : 'no-chat'}`}>
+                <div className="side-list">
+                    {activeTab === 'online' && (
+                        <div className="online-section">
+                            <div className="online-header">
+                                Онлайн
+                                {!connected && <span className="offline-note">нет связи</span>}
+                            </div>
+                            <p className="side-hint">
+                                Соперников видно здесь. Вызов на игру появится после подключения
+                                онлайн-режима.
+                            </p>
                         </div>
-                        <div className="online-list">
-                            {onlineUsers.map(user => (
-                                <div key={user} className="online-item">
-                                    <span className="online-dot"></span>
-                                    <div className="online-info">
-                                        <div className="online-name">{user}</div>
-                                    </div>
+                    )}
+
+                    {activeTab === 'friends' && (
+                        <div className="friends-section">
+                            <div className="online-header">Друзья</div>
+                            <p className="side-hint">Список друзей пока пуст.</p>
+                        </div>
+                    )}
+
+                    {activeTab === 'rating' && (
+                        <div className="leaderboard-section">
+                            <div className="online-header">Таблица лидеров</div>
+                            <p className="side-hint">Рейтинг начисляется по итогам матча.</p>
+                        </div>
+                    )}
+                </div>
+
+                {activeTab === 'online' && (
+                    <div className="chat-section">
+                        <div className="chat-header">Общий чат</div>
+                        <div className="chat-messages">
+                            {chatMessages.length === 0 && (
+                                <p className="chat-empty">Сообщений пока нет</p>
+                            )}
+                            {chatMessages.map((msg, i) => (
+                                <div
+                                    key={i}
+                                    className={`chat-message ${
+                                        msg.sender === username ? 'own' : 'other'
+                                    }`}
+                                >
+                                    <div className="sender">{msg.sender}</div>
+                                    <div className="text">{msg.text}</div>
                                 </div>
                             ))}
                         </div>
-                        <div className="online-actions">
-                            <button className="btn" onClick={onStartBot}>Игра против бота</button>
+                        <div className="chat-input">
+                            <input
+                                type="text"
+                                placeholder="Сообщение всем..."
+                                value={chatInput}
+                                onChange={e => setChatInput(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && handleSendChat()}
+                                maxLength={200}
+                            />
+                            <button className="btn-small" onClick={handleSendChat}>
+                                ➤
+                            </button>
                         </div>
                     </div>
                 )}
-
-                {activeTab === 'friends' && (
-                    <div className="friends-section">
-                        <p>Список друзей пуст</p>
-                    </div>
-                )}
-
-                {activeTab === 'leaderboard' && (
-                    <div className="leaderboard-section">
-                        <p>Таблица лидеров</p>
-                    </div>
-                )}
-            </div>
-
-            <div className="chat-section">
-                <div className="chat-header">
-                    <span>Общий чат</span>
-                </div>
-                <div className="chat-messages">
-                    {chatMessages.map((msg, i) => (
-                        <div key={i} className={`chat-message ${msg.sender === username ? 'own' : 'other'}`}>
-                            <div className="sender">{msg.sender}</div>
-                            <div className="text">{msg.text}</div>
-                        </div>
-                    ))}
-                </div>
-                <div className="chat-input">
-                    <input
-                        type="text"
-                        placeholder="Сообщение всем..."
-                        value={chatInput}
-                        onChange={(e) => setChatInput(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleSendChat()}
-                        maxLength={200}
-                    />
-                    <button className="btn-small" onClick={handleSendChat}>➤</button>
-                </div>
             </div>
         </div>
     );

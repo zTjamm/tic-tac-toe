@@ -1,0 +1,110 @@
+.match-result {
+    margin: 0 0 16px;
+    padding: 16px;
+    border-radius: 12px;
+    background: var(--status-bg);
+    text-align: center;
+    animation: result-in 0.3s ease;
+}
+
+@keyframes result-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.match-result-title {
+    font-size: 1.5em;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.match-result-win .match-result-title {
+    color: var(--win-color);
+}
+
+.match-result-loss .match-result-title {
+    color: var(--o-color);
+}
+
+.match-result-cancelled .match-result-title {
+    color: var(--draw-color);
+}
+
+.match-result-reason {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    margin-bottom: 14px;
+}
+
+.match-result-score {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.result-player {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: var(--cell-bg);
+    border: 2px solid transparent;
+}
+
+.result-player.is-winner {
+    border-color: var(--win-color);
+    background: var(--win-bg);
+}
+
+.result-player .name {
+    font-size: 0.9em;
+    color: var(--text-color);
+}
+
+.result-player .pts {
+    font-size: 1.4em;
+    font-weight: 700;
+    color: var(--text-color);
+    min-width: 1ch;
+    text-align: center;
+}
+
+.match-result-meta {
+    color: var(--text-muted);
+    font-size: 0.78em;
+    margin-bottom: 14px;
+}
+
+.match-result-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+
+.match-result-actions .btn {
+    flex: 0 0 auto;
+    min-width: 130px;
+    padding: 10px 18px;
+}
+
+.btn-ghost {
+    background: transparent;
+    border: 2px solid var(--border-color);
+    color: var(--text-color);
+}
+
+.btn-ghost:hover {
+    background: var(--cell-hover);
+    transform: translateY(-2px);
+    box-shadow: none;
+}

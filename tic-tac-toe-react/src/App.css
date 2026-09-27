@@ -1,4 +1,4 @@
-* {
+﻿* {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
@@ -36,7 +36,7 @@ body {
     padding: 20px;
 }
 
-/* Тёмная тема */
+/* РўС‘РјРЅР°СЏ С‚РµРјР° */
 [data-theme='dark'] {
     --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     --container-bg: rgba(30, 30, 46, 0.97);
@@ -59,13 +59,12 @@ body {
     --input-border: #3a3a52;
 }
 
-/* Основной layout: доска слева, панель справа.
-   Без игры панель занимает всю ширину (class with-game ставится в App.tsx). */
+/* РћСЃРЅРѕРІРЅРѕР№ layout: РІРµСЂС…РЅСЏСЏ РїР°РЅРµР»СЊ, Р·Р°С‚РµРј РґРѕСЃРєР° СЃР»РµРІР° Рё РїР°РЅРµР»СЊ СЃРїСЂР°РІР°.
+   Р‘РµР· РјР°С‚С‡Р° РїР°РЅРµР»СЊ Р·Р°РЅРёРјР°РµС‚ РІСЃСЋ С€РёСЂРёРЅСѓ. */
 .app {
     width: 100%;
-    max-width: 1100px;
+    max-width: 1200px;
     margin: 0 auto;
-    position: relative;
 }
 
 .app.with-game {
@@ -73,26 +72,90 @@ body {
     flex-wrap: wrap;
     gap: 20px;
     align-items: flex-start;
-    /* резерв под кнопку темы, вынесенную в угол */
-    padding-right: 64px;
 }
 
-/* Кнопка темы — в потоке, а не поверх вкладок: не перекрывает ничего
-   ни на одной ширине экрана. */
+/* РљРЅРѕРїРєР° С‚РµРјС‹ Р¶РёРІС‘С‚ РІ РІРµСЂС…РЅРµР№ РїР°РЅРµР»Рё */
 .theme-toggle {
-    display: flex;
-    justify-content: flex-end;
-    margin-bottom: 12px;
+    display: none;
 }
 
-/* В режиме с игрой кнопка уходит в угол и не занимает строку,
-   поэтому доска не выталкивается за пределы экрана. */
-.app.with-game .theme-toggle {
-    position: absolute;
-    top: 0;
-    right: 0;
-    margin-bottom: 0;
-    z-index: 5;
+/* Р’РµСЂС…РЅСЏСЏ РїР°РЅРµР»СЊ: Р±РѕС‚, С‚РµРјР°, РІС‹С…РѕРґ */
+/* Р’РµСЂС…РЅСЏСЏ РїР°РЅРµР»СЊ РІСЃРµРіРґР° РЅР° СЃРІРѕРµР№ СЃС‚СЂРѕРєРµ, РёРЅР°С‡Рµ flex РѕС‚РґР°С‘С‚ РµР№ С‡Р°СЃС‚СЊ
+   С€РёСЂРёРЅС‹ Рё схлопывает РґРѕСЃРєСѓ РІ 70 РїРёРєСЃРµР»РµР№ */
+.app.with-game .top-bar {
+    flex: 0 0 100%;
+}
+
+.top-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: var(--container-bg);
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.top-bar-title {
+    font-weight: 700;
+    font-size: 1.05em;
+    color: var(--text-color);
+    margin-right: auto;
+}
+
+.top-bar-user {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.top-bar-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.btn-top {
+    flex: 0 0 auto;
+    min-width: 0;
+    padding: 8px 14px;
+    font-size: 0.85em;
+    border-radius: 8px;
+}
+
+.btn-top:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-icon {
+    width: 40px;
+    padding: 8px 0;
+    text-align: center;
+    font-size: 1em;
+}
+
+.btn-logout {
+    background: transparent;
+    border: 2px solid var(--accent);
+    color: var(--accent);
+}
+
+.btn-logout:disabled {
+    border-color: var(--text-muted);
+    color: var(--text-muted);
+}
+
+.btn-logout:hover:not(:disabled) {
+    background: var(--accent);
+    color: #fff;
 }
 
 .theme-toggle button {
@@ -112,9 +175,10 @@ body {
     transform: scale(1.1);
 }
 
+/* РЎРєСЂРёРЅС€РѕС‚ РїРѕРєР°Р·Р°Р» СЃС…Р»РѕРїС‹РІР°РЅРёРµ РґРѕ ~70px: СЃС‚СЂР°С…РѕРІРєР° РѕС‚ СЌС‚РѕРіРѕ */
 .game-area {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 1 1 auto;
+    min-width: 300px;
     max-width: 520px;
     margin: 0 auto;
 }
@@ -220,21 +284,13 @@ h1 {
     color: white;
 }
 
-/* Мобильные: доска и панель в столбик. Правила .app/.theme-toggle должны
-   идти после базовых (они здесь), иначе перебьются порядком подключения. */
+/* РњРѕР±РёР»СЊРЅС‹Рµ: РґРѕСЃРєР° Рё РїР°РЅРµР»СЊ РІ СЃС‚РѕР»Р±РёРє. РџСЂР°РІРёР»Р° .app/.top-bar РґРѕР»Р¶РЅС‹ РёРґС‚Рё
+   РїРѕСЃР»Рµ Р±Р°Р·РѕРІС‹С… (РѕРЅРё Р·РґРµСЃСЊ), РёРЅР°С‡Рµ РїРµСЂРµР±СЊСЋС‚СЃСЏ РїРѕСЂСЏРґРєРѕРј РїРѕРґРєР»СЋС‡РµРЅРёСЏ. */
 @media (max-width: 900px) {
     .app.with-game {
         flex-direction: column;
         align-items: stretch;
         padding-right: 0;
-    }
-
-    /* Кнопка темы возвращается в поток над контентом: не нужен резерв
-       справа и она ничего не перекрывает */
-    .app.with-game .theme-toggle {
-        position: static;
-        margin-bottom: 12px;
-        z-index: auto;
     }
 
     .game-area {
@@ -259,3 +315,4 @@ h1 {
         width: 100%;
     }
 }
+

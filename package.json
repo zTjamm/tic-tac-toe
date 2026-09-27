@@ -7,11 +7,18 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "keywords": ["tic-tac-toe", "multiplayer", "websocket"],
+  "keywords": [
+    "tic-tac-toe",
+    "multiplayer",
+    "websocket"
+  ],
   "author": "zTjamm",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
     "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.4"
   }
 }
