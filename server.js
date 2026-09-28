@@ -7,6 +7,7 @@ const fs = require('fs');
 const cors = require('cors');
 const { MatchManager } = require('./match-manager');
 const { STRIKE_LIMIT } = require('./match');
+const { matchDeltas } = require('./rating');
 
 const app = express();
 const server = http.createServer(app);
@@ -288,6 +289,11 @@ app.post('/api/friends/add', (req, res) => {
 
     saveUsers();
 
+    // Дружба взаимная, поэтому у второго игрока тоже изменился список -
+    // без этого у него в панели останется кнопка «+ в друзья»
+    const otherSid = onlineUsers.get(friendUsername)?.socketId;
+    if (otherSid) io.to(otherSid).emit('friends:changed');
+
     res.json({ success: true, message: 'Друг добавлен' });
 });
 
@@ -308,6 +314,9 @@ app.post('/api/friends/remove', (req, res) => {
     }
 
     saveUsers();
+
+    const otherSid = onlineUsers.get(friendUsername)?.socketId;
+    if (otherSid) io.to(otherSid).emit('friends:changed');
 
     res.json({ success: true, message: 'Друг удалён' });
 });
@@ -402,19 +411,39 @@ app.post('/api/challenge/decline', (req, res) => {
 const chatHistory = [];
 const MAX_CHAT_HISTORY = 100;
 
-// Рейтинг по итогам матча: победа +2, поражение -1. Формулу с учётом разницы
-// рейтингов участников ещё предстоит обсудить, поэтому пока плоская.
-const MATCH_WIN_POINTS = 2;
-const MATCH_LOSS_POINTS = -1;
+// Бот играет с постоянным рейтингом: иначе новичок, побеждающий бота,
+// получал бы полные очки, а бот - неполные, и рейтинг новичка разгонялся
+// слишком быстро. 1000 - стартовое значение игрока, поэтому игра с ботом
+// не меняет рейтинг вообще.
+const BOT_RATING = 1000;
 
 const matchManager = new MatchManager(io, {
     // Финал освобождает игроков - обновляем список онлайна, иначе в нём
     // они останутся занятыми и их нельзя будет вызвать на новую игру
     onFinish: () => broadcastOnline(),
     onResult: (winner, loser, result) => {
-        if (winner && !winner.isBot) updatePlayerStats(winner.username, 'win');
-        if (loser && !loser.isBot) updatePlayerStats(loser.username, 'loss');
-        console.log(`[Match] матч окончен: ${result.reason || 'score'}, победил ${winner ? winner.username : '-'}`);
+        // Дельты считаются по рейтингам обоих ДО изменения, иначе победитель
+        // посчитался бы по старому рейтингу соперника, а тот - уже по своему
+        // новому, и сумма очков в матче перестала бы сходиться к нулю
+        const winnerName = winner && !winner.isBot ? winner.username : null;
+        const loserName = loser && !loser.isBot ? loser.username : null;
+        const winnerUser = winnerName ? users.get(winnerName) : null;
+        const loserUser = loserName ? users.get(loserName) : null;
+
+        const { win, loss } = matchDeltas(
+            winnerUser ? winnerUser.rating : BOT_RATING,
+            loserUser ? loserUser.rating : BOT_RATING
+        );
+
+        if (winnerUser) applyStats(winnerUser, 'win', win);
+        if (loserUser) applyStats(loserUser, 'loss', loss);
+
+        console.log(
+            `[Match] матч окончен: ${result.reason || 'score'}, победил ` +
+            `${winner ? winner.username : '-'} (${winnerUser ? winnerUser.rating - win : '-'}->` +
+            `${winnerUser ? winnerUser.rating : '-'}, ${loserUser ? loserUser.rating - loss : '-'}->` +
+            `${loserUser ? loserUser.rating : '-'})`
+        );
     }
 });
 
@@ -491,25 +520,22 @@ function startHumanMatch(a, b, oldRoom = null) {
     return roomId;
 }
 
-function updatePlayerStats(username, result) {
-    const user = users.get(username);
-    if (!user) return;
-
+/** Записывает исход матча игроку и двигает его рейтинг на заданную дельту. */
+function applyStats(user, result, delta) {
     if (result === 'win') {
         user.wins++;
         user.streak++;
         user.maxStreak = Math.max(user.maxStreak, user.streak);
-        // TODO: здесь будет формула с учётом разницы рейтингов участников
-        user.rating += MATCH_WIN_POINTS;
     } else if (result === 'loss') {
         user.losses++;
         user.streak = 0;
-        // Дельты складываются: MATCH_LOSS_POINTS = -1, поэтому rating уменьшается
-        user.rating = Math.max(0, user.rating + MATCH_LOSS_POINTS);
     } else {
         user.draws++;
         user.streak = 0;
     }
+
+    // Рейтинг не уходит в минус: при нуле матч всё равно засчитывается
+    user.rating = Math.max(0, user.rating + delta);
 
     user.history.push({
         result,
@@ -622,6 +648,30 @@ io.on('connection', (socket) => {
     });
 
     /* ================ сетевой матч: вызов и реванш ================ */
+
+    // Игрок нажал «В меню». Матч уже завершён, и оставлять соперника
+    // одного на экране результата незачем - выводим его тоже.
+    socket.on('match:leave', () => {
+        const username = usernameBySocket(socket.id);
+        if (!username) return;
+
+        const roomId = matchManager.roomOf(username) ||
+            matchManager.finishedRoomOf(username);
+        if (!roomId) return;
+        const snap = matchManager.snapshotOf(roomId);
+        // Из идущего матча выйти нельзя: там кнопки выхода и нет
+        if (!snap || snap.phase !== 'finished') return;
+
+        for (const p of snap.players) {
+            if (p.isBot || p.id === username) continue;
+            const sid = onlineUsers.get(p.id)?.socketId;
+            if (sid) io.to(sid).emit('match:exit', { by: username });
+        }
+
+        // Соперник ушёл с экрана - матч больше не пригодится ни одному из них
+        matchManager.dispose(roomId);
+        console.log(`[Match] ${username} вышел из матча ${roomId}`);
+    });
 
     socket.on('match:rematch', () => {
         const username = usernameBySocket(socket.id);
