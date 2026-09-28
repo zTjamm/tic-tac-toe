@@ -11,7 +11,10 @@
     --text-muted: #666;
     --border-color: #ddd;
     --cell-bg: #fff;
-    --cell-hover: #f0f0f0;
+    /* Рамка клетки доски отдельная от --border-color: в светлой теме клетка
+       белая, и обычная #ddd на белом контейнере даёт еле заметный контур */
+    --cell-border: #aeb6c4;
+    --cell-hover: #eef1f8;
     --score-bg: #f0f0f0;
     --status-bg: #e8eaf6;
     --x-color: #1976d2;
@@ -20,6 +23,11 @@
     --o-bg: #fce4ec;
     --win-color: #2e7d32;
     --win-bg: #c8e6c9;
+    /* Загаданное системой число: золотое свечение, чтобы его не спутать
+       с выбором игрока */
+    --guess-color: #b8860b;
+    --guess-bg: #fff8e1;
+    --guess-glow: rgba(218, 165, 32, 0.55);
     --draw-color: #f57f17;
     --draw-bg: #fff9c4;
     --accent: #667eea;
@@ -47,6 +55,7 @@ body {
     --text-muted: #9aa0b4;
     --border-color: #3a3a52;
     --cell-bg: #262640;
+    --cell-border: #4d4d70;
     --cell-hover: #33334f;
     --score-bg: #2a2a44;
     --status-bg: #2a2a44;
@@ -56,6 +65,9 @@ body {
     --o-bg: #4a2740;
     --win-color: #81c784;
     --win-bg: #234d2b;
+    --guess-color: #ffd54f;
+    --guess-bg: #4a3f10;
+    --guess-glow: rgba(255, 213, 79, 0.5);
     --draw-color: #ffb74d;
     --draw-bg: #4a3c1a;
     --input-bg: #262640;

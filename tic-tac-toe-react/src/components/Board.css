@@ -18,7 +18,7 @@
 
 .cell {
     background: var(--cell-bg);
-    border: 3px solid var(--border-color);
+    border: 3px solid var(--cell-border);
     border-radius: 15px;
     display: flex;
     justify-content: center;
@@ -70,8 +70,9 @@
     font-weight: 700;
     color: var(--text-muted);
     background: var(--cell-bg);
+    /* Пунктир в 2px на светлом фоне почти не читался - толще и контрастнее */
     border-style: dashed;
-    border-width: 2px;
+    border-width: 3px;
 }
 
 .board-guessing .cell.taken {
@@ -109,6 +110,16 @@
     white-space: nowrap;
 }
 
+/* Подпись под загаданным числом */
+.cell-system {
+    font-size: 0.26em;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.9;
+    white-space: nowrap;
+}
+
 /* Победитель угадайки получает рамку, ему выбирать роль */
 .cell-pick-owner.is-winner {
     opacity: 1;
@@ -120,11 +131,44 @@
     text-decoration: underline;
 }
 
-/* Системное число в клетке подсвечивается ярче */
+/* Системное число: золотое свечение. Раньше класс .revealed был написан,
+   но никогда не присваивался - игроки видели число только в тексте
+   таймера и не понимали, к какой клетке оно относится */
 .cell-number.revealed {
-    border-color: var(--win-color);
-    background: var(--win-bg);
-    color: var(--win-color);
+    border-style: solid;
+    border-color: var(--guess-color);
+    background: var(--guess-bg);
+    color: var(--guess-color);
+    font-weight: 800;
+    box-shadow: 0 0 0 2px var(--guess-color), 0 0 18px 4px var(--guess-glow);
+    animation: guess-glow 1.6s ease-in-out infinite;
+}
+
+@keyframes guess-glow {
+    0%, 100% {
+        box-shadow: 0 0 0 2px var(--guess-color), 0 0 12px 2px var(--guess-glow);
+    }
+    50% {
+        box-shadow: 0 0 0 2px var(--guess-color), 0 0 26px 8px var(--guess-glow);
+    }
+}
+
+/* Клетка в угадайке, по которой сейчас нельзя хлопнуть: идёт отсчёт
+   или клетку занял соперник. Раньше клик по такой клетке молча
+   ничего не делал, и выглядело это как «выбирать надо по очереди» */
+.board-guessing .cell.locked {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.board-guessing .cell.locked:hover {
+    transform: none;
+}
+
+/* Отсчёт уже идёт - клетки гаснут, чтобы было видно, что ждать */
+.board-guessing.waiting .cell {
+    opacity: 0.4;
+    border-style: dashed;
 }
 
 .board-empty .cell {

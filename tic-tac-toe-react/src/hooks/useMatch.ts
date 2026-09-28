@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
-import type { MatchSnapshot, MatchStateMessage, ChatMessage, RoundEndInfo, OnlineUser } from '../types';
+import { apiFetch } from '../api';
+import type {
+    MatchSnapshot,
+    MatchStateMessage,
+    ChatMessage,
+    RoundEndInfo,
+    OnlineUser,
+    Friend,
+    LeaderboardEntry
+} from '../types';
 
 export interface IncomingChallenge {
     challengeId: string;
@@ -20,6 +29,8 @@ export interface RematchRequest {
 export function useMatch(username: string) {
     const [snapshot, setSnapshot] = useState<MatchSnapshot | null>(null);
     const [lastRoundEnd, setLastRoundEnd] = useState<RoundEndInfo | null>(null);
+    /** клетки выигрышной линии последнего раунда; null если линии нет */
+    const [winPattern, setWinPattern] = useState<number[] | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [connected, setConnected] = useState(false);
     const [online, setOnline] = useState<OnlineUser[]>([]);
@@ -27,10 +38,15 @@ export function useMatch(username: string) {
     const [rematchRequest, setRematchRequest] = useState<RematchRequest | null>(null);
     const [pendingTarget, setPendingTarget] = useState<string | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
+    const [friends, setFriends] = useState<Friend[]>([]);
+    const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 
     const socketRef = useRef<Socket | null>(null);
     const usernameRef = useRef(username);
     const roomRef = useRef<string | null>(null);
+    // Обработчики сокета поднимаются один раз, а loadFriends пересоздаётся
+    // на каждый рендер - через ref достаём актуальную без переподписки
+    const loadFriendsRef = useRef<() => void>(() => {});
 
     useEffect(() => {
         usernameRef.current = username;
@@ -69,7 +85,17 @@ export function useMatch(username: string) {
         socket.on('match:state', (msg: MatchStateMessage) => {
             roomRef.current = msg.snapshot.roomId;
             setSnapshot(msg.snapshot);
-            if (msg.type === 'roundEnd' && msg.extra) setLastRoundEnd(msg.extra);
+            if (msg.type === 'roundEnd' && msg.extra) {
+                setLastRoundEnd(msg.extra);
+                // Сервер отдаёт клетки выигрышной линии - доска их подсветит.
+                // При ничьей winPattern равен null
+                setWinPattern(msg.extra.winPattern);
+            }
+            // Начался новый раунд - линии прошлого на доске уже нет
+            if (msg.type === 'roundStart' || msg.type === 'guessStart') {
+                setLastRoundEnd(null);
+                setWinPattern(null);
+            }
         });
 
         socket.on('globalChatMessage', (msg: ChatMessage) => {
@@ -109,6 +135,19 @@ export function useMatch(username: string) {
         socket.on('rematchError', (data: { message: string }) => {
             setPendingTarget(null);
             setNotice(data.message);
+        });
+
+        // Дружба взаимная: изменил список один - обновиться должны оба
+        socket.on('friends:changed', () => loadFriendsRef.current());
+
+        // Соперник вышел из завершённого матча - его больше нет, ждать
+        // реванша бессмысленно, поэтому тоже уходим в меню
+        socket.on('match:exit', (data: { by: string }) => {
+            setSnapshot(null);
+            setLastRoundEnd(null);
+            setRematchRequest(null);
+            setPendingTarget(null);
+            setNotice(`${data.by} вышел из матча`);
         });
 
         return () => {
@@ -157,6 +196,19 @@ export function useMatch(username: string) {
     const clearMatch = useCallback(() => {
         setSnapshot(null);
         setLastRoundEnd(null);
+        setWinPattern(null);
+    }, []);
+
+    /* ------------------------ выход из матча ------------------------ */
+
+    // Игрок нажал «В меню»: сервер выведет и соперника, чтобы тот не
+    // остался один на экране законченного матча
+    const leaveMatch = useCallback(() => {
+        socketRef.current?.emit('match:leave');
+        setSnapshot(null);
+        setLastRoundEnd(null);
+        setWinPattern(null);
+        setPendingTarget(null);
     }, []);
 
     /* ------------------------- вызов на игру ------------------------- */
@@ -164,24 +216,14 @@ export function useMatch(username: string) {
     const sendChallenge = useCallback(
         async (targetUsername: string) => {
             if (!username || !targetUsername) return;
-            const token = localStorage.getItem('token') || '';
             try {
-                const res = await fetch('/api/challenge/send', {
+                await apiFetch('/api/challenge/send', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        Authorization: `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ targetUsername })
+                    body: { targetUsername }
                 });
-                const data = await res.json();
-                if (!res.ok) {
-                    setNotice(data.error || 'Не удалось отправить вызов');
-                    return;
-                }
                 setPendingTarget(targetUsername);
-            } catch {
-                setNotice('Сеть недоступна');
+            } catch (e) {
+                setNotice(e instanceof Error ? e.message : 'Сеть недоступна');
             }
         },
         [username]
@@ -190,21 +232,14 @@ export function useMatch(username: string) {
     const respondChallenge = useCallback(
         async (accept: boolean) => {
             if (!incoming) return;
-            const token = localStorage.getItem('token') || '';
             const endpoint = accept ? '/api/challenge/accept' : '/api/challenge/decline';
             try {
-                const res = await fetch(endpoint, {
+                await apiFetch(endpoint, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        Authorization: `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ challengeId: incoming.challengeId })
+                    body: { challengeId: incoming.challengeId }
                 });
-                const data = await res.json();
-                if (!res.ok) setNotice(data.error || 'Не удалось ответить на вызов');
-            } catch {
-                setNotice('Сеть недоступна');
+            } catch (e) {
+                setNotice(e instanceof Error ? e.message : 'Не удалось ответить на вызов');
             } finally {
                 setIncoming(null);
             }
@@ -227,9 +262,70 @@ export function useMatch(username: string) {
 
     const clearNotice = useCallback(() => setNotice(null), []);
 
+    /* ---------------------- друзья и таблица лидеров ---------------------- */
+
+    const loadFriends = useCallback(async () => {
+        try {
+            const data = await apiFetch<Friend[]>('/api/friends');
+            if (Array.isArray(data)) setFriends(data);
+        } catch {
+            // Протухший токен уже сообщён через auth:expired, сеть - просто
+            // оставляем показывать то, что есть
+        }
+    }, []);
+
+    const loadLeaderboard = useCallback(async () => {
+        try {
+            const data = await apiFetch<LeaderboardEntry[]>('/api/leaderboard');
+            if (Array.isArray(data)) setLeaderboard(data);
+        } catch {
+            /* сеть недоступна - показываем то, что уже есть */
+        }
+    }, []);
+
+    // Дружба взаимная, поэтому после любого изменения перечитываем список:
+    // у соперника тоже могла появиться или исчезнуть
+    const addFriend = useCallback(
+        async (name: string) => {
+            try {
+                await apiFetch('/api/friends/add', {
+                    method: 'POST',
+                    body: { friendUsername: name }
+                });
+                await loadFriends();
+            } catch (e) {
+                setNotice(e instanceof Error ? e.message : 'Сеть недоступна');
+            }
+        },
+        [loadFriends]
+    );
+
+    const removeFriend = useCallback(
+        async (name: string) => {
+            try {
+                await apiFetch('/api/friends/remove', {
+                    method: 'POST',
+                    body: { friendUsername: name }
+                });
+                await loadFriends();
+            } catch (e) {
+                setNotice(e instanceof Error ? e.message : 'Сеть недоступна');
+            }
+        },
+        [loadFriends]
+    );
+
+    // Список онлайна меняет и статусы друзей, поэтому перечитываем его
+    // вместе с обновлением онлайна
+    useEffect(() => {
+        loadFriendsRef.current = loadFriends;
+        if (username) loadFriends();
+    }, [username, online, loadFriends]);
+
     return {
         snapshot,
         lastRoundEnd,
+        winPattern,
         messages,
         connected,
         online,
@@ -237,6 +333,8 @@ export function useMatch(username: string) {
         rematchRequest,
         pendingTarget,
         notice,
+        friends,
+        leaderboard,
         startBotMatch,
         syncMatch,
         pickNumber,
@@ -248,6 +346,11 @@ export function useMatch(username: string) {
         respondChallenge,
         requestRematch,
         respondRematch,
+        leaveMatch,
+        loadFriends,
+        loadLeaderboard,
+        addFriend,
+        removeFriend,
         clearNotice
     };
 }

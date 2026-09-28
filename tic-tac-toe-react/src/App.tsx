@@ -7,6 +7,7 @@ import MatchResult from './components/MatchResult';
 import AuthModal from './components/AuthModal';
 import SidePanel from './components/SidePanel';
 import ChallengeDialog from './components/ChallengeDialog';
+import { clearToken } from './api';
 import './App.css';
 
 const App: React.FC = () => {
@@ -16,7 +17,7 @@ const App: React.FC = () => {
     const [token, setToken] = useState<string>('');
 
     const match = useMatch(username);
-    const { snapshot, startBotMatch, syncMatch, pickNumber, chooseRole, makeMove, clearMatch,
+    const { snapshot, startBotMatch, syncMatch, pickNumber, chooseRole, makeMove,
         requestRematch } = match;
 
     // Мой id внутри матча равен нику
@@ -54,6 +55,20 @@ const App: React.FC = () => {
         syncMatch();
     }, [showAuth, syncMatch]);
 
+    // Токен живёт в памяти сервера и умирает при каждом рестарте. Без этой
+    // реакции интерфейс просто молчал бы: друзья и рейтинг пустые, вызовы
+    // не уходят, и непонятно, что вообще происходит
+    useEffect(() => {
+        const onExpired = () => {
+            clearToken();
+            setToken('');
+            setUsername('');
+            setShowAuth(true);
+        };
+        window.addEventListener('auth:expired', onExpired);
+        return () => window.removeEventListener('auth:expired', onExpired);
+    }, []);
+
     const handleLogin = (user: string, accessToken: string) => {
         setUsername(user);
         setToken(accessToken);
@@ -61,8 +76,7 @@ const App: React.FC = () => {
     };
 
     const handleLogout = () => {
-        localStorage.removeItem('token');
-        localStorage.removeItem('username');
+        clearToken();
         setToken('');
         setUsername('');
         setShowAuth(true);
@@ -119,13 +133,14 @@ const App: React.FC = () => {
                                 myId={myId}
                                 canRematch={match.connected}
                                 onRematch={handleRematch}
-                                onExit={clearMatch}
+                                onExit={match.leaveMatch}
                             />
                         )}
 
                         <Board
                             snapshot={snapshot}
                             myId={myId}
+                            winPattern={match.winPattern}
                             onPickNumber={pickNumber}
                             onMove={makeMove}
                         />
@@ -137,11 +152,17 @@ const App: React.FC = () => {
                 username={username}
                 chatMessages={match.messages}
                 online={match.online}
+                friends={match.friends}
+                leaderboard={match.leaderboard}
                 connected={match.connected}
                 pendingTarget={match.pendingTarget}
                 onSendChat={match.sendChat}
                 onChallenge={match.sendChallenge}
                 onStartBot={startBotMatch}
+                onAddFriend={match.addFriend}
+                onRemoveFriend={match.removeFriend}
+                loadFriends={match.loadFriends}
+                loadLeaderboard={match.loadLeaderboard}
             />
 
             <ChallengeDialog

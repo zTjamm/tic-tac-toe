@@ -6,6 +6,8 @@ interface BoardProps {
     snapshot: MatchSnapshot | null;
     /** id игрока, который смотрит доску (для подсветки его выбора) */
     myId: string | null;
+    /** клетки выигрышной линии прошлого раунда; null пока линии нет */
+    winPattern: number[] | null;
     onPickNumber: (cell: number) => void;
     onMove: (cell: number) => void;
 }
@@ -20,6 +22,7 @@ interface BoardProps {
 const Board: React.FC<BoardProps> = ({
     snapshot,
     myId,
+    winPattern,
     onPickNumber,
     onMove
 }) => {
@@ -47,29 +50,48 @@ const Board: React.FC<BoardProps> = ({
 
     const handleClick = (index: number) => {
         if (inGuessing) {
-            if (canPick) onPickNumber(index);
+            // Клик по занятой соперником клетке раньше уходил на сервер,
+            // который молча его отклонял: выглядело, что игра зависла
+            if (canPick && !players.some(p => p.pick === index)) onPickNumber(index);
             return;
         }
         if (myTurn && board[index] === '') onMove(index);
     };
 
+    // Пока идёт отсчёт, хлопать по клеткам бесполезно - гасим их заранее
+    const waiting = inGuessing && guessing?.sub !== 'picking';
+    const systemNumber = guessing?.systemNumber ?? null;
+
     return (
         <div
             className={`board ${inGuessing ? 'board-guessing' : ''} ${
-                phase === 'finished' ? 'board-finished' : ''
-            }`}
+                waiting ? 'waiting' : ''
+            } ${phase === 'finished' ? 'board-finished' : ''}`}
         >
             {Array.from({ length: 9 }).map((_, index) => {
                 if (inGuessing) {
+                    const taken = players.some(p => p.pick === index);
+                    // Число на клетке, которое загадала система. Условие не
+                    // привязано к sub === 'reveal': открытое число должно
+                    // гореть и на фазе выбора роли, где игрок и решает, кто
+                    // оказался ближе. systemNumber обнуляется только в
+                    // начале новой угадайки, поэтому метка гаснет сама
+                    const isSystem =
+                        systemNumber !== null &&
+                        cellNumbers[index] === systemNumber;
+
                     return (
                         <div
                             key={index}
                             className={`cell cell-number ${pickClass(index, players, myId)} ${
-                                canPick && players.some(p => p.pick === index) ? 'taken' : ''
+                                taken ? 'taken' : ''
+                            } ${canPick && !taken ? '' : 'locked'} ${
+                                isSystem ? 'revealed' : ''
                             }`}
                             onClick={() => handleClick(index)}
                         >
                             <span className="cell-num">{cellNumbers[index]}</span>
+                            {isSystem && <span className="cell-system">загадано</span>}
                             {pickBadge(index, players, guessing?.winnerId ?? null)}
                         </div>
                     );
@@ -77,12 +99,13 @@ const Board: React.FC<BoardProps> = ({
 
                 const cell: CellValue = board[index] ?? '';
                 const disabled = !myTurn || cell !== '';
+                const isWin = !!winPattern && winPattern.includes(index);
                 return (
                     <div
                         key={index}
                         className={`cell ${cell ? cell.toLowerCase() : ''} ${
                             disabled ? 'taken' : ''
-                        }`}
+                        } ${isWin ? 'win' : ''}`}
                         onClick={() => handleClick(index)}
                     >
                         {cell}

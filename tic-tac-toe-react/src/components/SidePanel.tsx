@@ -1,17 +1,25 @@
-import React, { useState } from 'react';
-import type { ChatMessage, OnlineUser } from '../types';
+import React, { useEffect, useState } from 'react';
+import type { ChatMessage, OnlineUser, Friend, LeaderboardEntry } from '../types';
 import './SidePanel.css';
 
 interface SidePanelProps {
     username: string;
     chatMessages: ChatMessage[];
     online: OnlineUser[];
+    friends: Friend[];
+    leaderboard: LeaderboardEntry[];
     connected: boolean;
     /** вызов отправлен и ждём ответа */
     pendingTarget: string | null;
     onSendChat: (text: string) => void;
     onChallenge: (target: string) => void;
     onStartBot: () => void;
+    onAddFriend: (name: string) => void;
+    onRemoveFriend: (name: string) => void;
+    /** стабильные загрузчики: если они меняются на каждом рендере,
+        эффект ниже начнёт перезапрашивать данные бесконечно */
+    loadFriends: () => void;
+    loadLeaderboard: () => void;
 }
 
 type Tab = 'online' | 'friends' | 'rating';
@@ -20,14 +28,33 @@ const SidePanel: React.FC<SidePanelProps> = ({
     username,
     chatMessages,
     online,
+    friends,
+    leaderboard,
     connected,
     pendingTarget,
     onSendChat,
     onChallenge,
-    onStartBot
+    onStartBot,
+    onAddFriend,
+    onRemoveFriend,
+    loadFriends,
+    loadLeaderboard
 }) => {
     const [activeTab, setActiveTab] = useState<Tab>('online');
     const [chatInput, setChatInput] = useState('');
+    const [friendInput, setFriendInput] = useState('');
+
+    // Данные вкладок меняются после каждого матча, поэтому тянем их при
+    // открытии, а не один раз при загрузке страницы
+    useEffect(() => {
+        if (activeTab === 'rating') loadLeaderboard();
+    }, [activeTab, loadLeaderboard]);
+
+    useEffect(() => {
+        if (activeTab === 'friends') loadFriends();
+    }, [activeTab, loadFriends]);
+
+    const switchTab = (tab: Tab) => setActiveTab(tab);
 
     const handleSendChat = () => {
         const text = chatInput.trim();
@@ -37,8 +64,16 @@ const SidePanel: React.FC<SidePanelProps> = ({
         }
     };
 
+    const handleAddFriend = () => {
+        const name = friendInput.trim();
+        if (!name) return;
+        onAddFriend(name);
+        setFriendInput('');
+    };
+
     // Себя в списке не показываем
     const others = online.filter(u => u.username !== username);
+    const friendNames = new Set(friends.map(f => f.username));
 
     return (
         <div className="side-panel">
@@ -50,19 +85,19 @@ const SidePanel: React.FC<SidePanelProps> = ({
                     <div className="side-tabs">
                         <button
                             className={`side-tab ${activeTab === 'online' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('online')}
+                            onClick={() => switchTab('online')}
                         >
                             Онлайн
                         </button>
                         <button
                             className={`side-tab ${activeTab === 'friends' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('friends')}
+                            onClick={() => switchTab('friends')}
                         >
                             Друзья
                         </button>
                         <button
                             className={`side-tab ${activeTab === 'rating' ? 'active' : ''}`}
-                            onClick={() => setActiveTab('rating')}
+                            onClick={() => switchTab('rating')}
                         >
                             Рейтинг
                         </button>
@@ -92,28 +127,46 @@ const SidePanel: React.FC<SidePanelProps> = ({
                                     )}
                                     {others.map(u => {
                                         const pending = pendingTarget === u.username;
+                                        const isFriend = friendNames.has(u.username);
                                         return (
                                             <li key={u.username} className="online-item">
-                                                <span className="online-dot" />
-                                                <div className="online-info">
-                                                    <div className="online-name">{u.username}</div>
-                                                    <div className="online-rating">
-                                                        рейтинг {u.rating}
+                                                <div className="online-row">
+                                                    <span className="online-dot" />
+                                                    <div className="online-info">
+                                                        <div className="online-name">{u.username}</div>
+                                                        <div className="online-rating">
+                                                            рейтинг {u.rating}
+                                                        </div>
                                                     </div>
+                                                    <button
+                                                        className="btn-online-challenge"
+                                                        disabled={u.inMatch || !!pending}
+                                                        onClick={() => onChallenge(u.username)}
+                                                        title={
+                                                            u.inMatch
+                                                                ? 'Игрок уже в матче'
+                                                                : pending
+                                                                    ? 'Ждём ответа'
+                                                                    : 'Вызвать на игру'
+                                                        }
+                                                    >
+                                                        {u.inMatch ? 'играет' : pending ? 'ждём' : 'вызвать'}
+                                                    </button>
                                                 </div>
                                                 <button
-                                                    className="btn-online-challenge"
-                                                    disabled={u.inMatch || !!pending}
-                                                    onClick={() => onChallenge(u.username)}
+                                                    className={`btn-friend-toggle ${isFriend ? 'is-friend' : ''}`}
+                                                    onClick={() =>
+                                                        isFriend
+                                                            ? onRemoveFriend(u.username)
+                                                            : onAddFriend(u.username)
+                                                    }
                                                     title={
-                                                        u.inMatch
-                                                            ? 'Игрок уже в матче'
-                                                            : pending
-                                                                ? 'Ждём ответа'
-                                                                : 'Вызвать на игру'
+                                                        isFriend
+                                                            ? 'Убрать из друзей'
+                                                            : 'Добавить в друзья'
                                                     }
                                                 >
-                                                    {u.inMatch ? 'играет' : pending ? 'ждём' : 'вызвать'}
+                                                    {isFriend ? '✓ в друзьях' : '+ в друзья'}
                                                 </button>
                                             </li>
                                         );
@@ -124,15 +177,108 @@ const SidePanel: React.FC<SidePanelProps> = ({
 
                         {activeTab === 'friends' && (
                             <div className="friends-section">
-                                <div className="online-header">Друзья</div>
-                                <p className="side-hint">Список друзей пока пуст.</p>
+                                <div className="online-header">
+                                    Друзья: {friends.length}
+                                </div>
+
+                                {/* Добавление по нику: незнакомого игрока может
+                                    не быть в онлайне, но он мог сыграть раньше */}
+                                <div className="friend-add">
+                                    <input
+                                        type="text"
+                                        placeholder="Ник для добавления"
+                                        value={friendInput}
+                                        onChange={e => setFriendInput(e.target.value)}
+                                        onKeyDown={e => e.key === 'Enter' && handleAddFriend()}
+                                        maxLength={32}
+                                    />
+                                    <button className="btn-small" onClick={handleAddFriend}>
+                                        +
+                                    </button>
+                                </div>
+
+                                {friends.length === 0 ? (
+                                    <p className="side-hint">
+                                        Список пуст. Добавьте игрока по нику или кнопкой
+                                        «+ в друзья» в списке онлайна.
+                                    </p>
+                                ) : (
+                                    <ul className="online-list">
+                                        {friends.map(f => {
+                                            const pending = pendingTarget === f.username;
+                                            return (
+                                                <li key={f.username} className="online-item">
+                                                    <div className="online-row">
+                                                        <span
+                                                            className={`online-dot ${f.online ? '' : 'offline'}`}
+                                                        />
+                                                        <div className="online-info">
+                                                            <div className="online-name">
+                                                                {f.username}
+                                                            </div>
+                                                            <div className="online-rating">
+                                                                рейтинг {f.rating}
+                                                                {f.online ? '' : ' · не в сети'}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            className="btn-online-challenge"
+                                                            disabled={!f.online || !!pending}
+                                                            onClick={() => onChallenge(f.username)}
+                                                            title={
+                                                                !f.online
+                                                                    ? 'Игрок не в сети'
+                                                                    : pending
+                                                                        ? 'Ждём ответа'
+                                                                        : 'Вызвать на игру'
+                                                            }
+                                                        >
+                                                            {pending ? 'ждём' : 'вызвать'}
+                                                        </button>
+                                                    </div>
+                                                    <button
+                                                        className="btn-friend-toggle is-friend"
+                                                        onClick={() => onRemoveFriend(f.username)}
+                                                        title="Убрать из друзей"
+                                                    >
+                                                        ✕ убрать
+                                                    </button>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                )}
                             </div>
                         )}
 
                         {activeTab === 'rating' && (
                             <div className="leaderboard-section">
                                 <div className="online-header">Таблица лидеров</div>
-                                <p className="side-hint">Рейтинг начисляется по итогам матча.</p>
+
+                                {leaderboard.length === 0 ? (
+                                    <p className="side-hint">
+                                        Пока никто не играл. Рейтинг начисляется по итогам матча.
+                                    </p>
+                                ) : (
+                                    <ol className="leaderboard">
+                                        {leaderboard.map((e, i) => (
+                                            <li
+                                                key={e.username}
+                                                className={`leaderboard-row ${e.username === username ? 'me' : ''}`}
+                                            >
+                                                <span className="place">{i + 1}</span>
+                                                <span className="who">
+                                                    {e.username}
+                                                    {e.username === username && ' (вы)'}
+                                                </span>
+                                                <span className="record">
+                                                    {e.wins}П {e.losses}П {e.draws}Н
+                                                </span>
+                                                <span className="points">{e.rating}</span>
+                                            </li>
+                                        ))}
+                                    </ol>
+                                )}
                             </div>
                         )}
                     </div>
