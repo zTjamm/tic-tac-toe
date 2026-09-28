@@ -110,3 +110,10 @@ export interface RoundEndInfo {
     gainD: number;
     winPattern: number[] | null;
 }
+
+export interface OnlineUser {
+    username: string;
+    rating: number;
+    /** уже в матче — вызов ему недоступен */
+    inMatch: boolean;
+}

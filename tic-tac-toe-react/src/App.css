@@ -34,6 +34,9 @@ body {
     background: var(--bg-gradient);
     min-height: 100vh;
     padding: 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
 }
 
 /* РўС‘РјРЅР°СЏ С‚РµРјР° */
@@ -65,10 +68,15 @@ body {
     width: 100%;
     max-width: 1200px;
     margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
 }
 
 .app.with-game {
     display: flex;
+    flex-direction: row;
     flex-wrap: wrap;
     gap: 20px;
     align-items: flex-start;

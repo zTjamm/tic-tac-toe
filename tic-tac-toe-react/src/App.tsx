@@ -6,6 +6,7 @@ import Countdown from './components/Countdown';
 import MatchResult from './components/MatchResult';
 import AuthModal from './components/AuthModal';
 import SidePanel from './components/SidePanel';
+import ChallengeDialog from './components/ChallengeDialog';
 import './App.css';
 
 const App: React.FC = () => {
@@ -15,8 +16,8 @@ const App: React.FC = () => {
     const [token, setToken] = useState<string>('');
 
     const match = useMatch(username);
-    const { snapshot, startBotMatch, syncMatch, pickNumber, chooseRole, makeMove, clearMatch } =
-        match;
+    const { snapshot, startBotMatch, syncMatch, pickNumber, chooseRole, makeMove, clearMatch,
+        requestRematch } = match;
 
     // Мой id внутри матча равен нику
     const myId = username || null;
@@ -75,8 +76,8 @@ const App: React.FC = () => {
         // поэтому some(p => !p.isBot) всегда истинно.
         const humans = snapshot.players.filter(p => !p.isBot).length;
         if (humans > 1) {
-            // пока сетевой реванш не реализован - честно говорим об этом
-            window.alert('Реванш по сети скоро появится. Пока можно сыграть с ботом.');
+            // Сетевой реванш требует согласия соперника
+            requestRematch();
             return;
         }
         startBotMatch();
@@ -135,8 +136,21 @@ const App: React.FC = () => {
             <SidePanel
                 username={username}
                 chatMessages={match.messages}
+                online={match.online}
                 connected={match.connected}
+                pendingTarget={match.pendingTarget}
                 onSendChat={match.sendChat}
+                onChallenge={match.sendChallenge}
+                onStartBot={startBotMatch}
+            />
+
+            <ChallengeDialog
+                challenge={match.incoming}
+                rematch={match.rematchRequest}
+                notice={match.notice}
+                onRespondChallenge={match.respondChallenge}
+                onRespondRematch={match.respondRematch}
+                onDismissNotice={match.clearNotice}
             />
         </div>
     );

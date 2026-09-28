@@ -16,27 +16,38 @@
     align-self: stretch;
 }
 
-/* До начала игры панель занимает весь экран — чату есть где расти */
+/* До начала игры панель делит с приложением всю высоту окна. Раньше здесь
+   стояло min-height: calc(100vh - 70px) - при переносе верхней панели на
+   узком экране не хватало, и поле ввода чата уходило под сгиб */
 .app:not(.with-game) .side-panel {
-    min-height: calc(100vh - 70px);
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
 }
 
 .side-tabs {
     display: flex;
+    flex: 0 0 auto;
     background: var(--score-bg);
     border-bottom: 1px solid var(--border-color);
 }
 
+/* В матче колонка списка узкая (≈185px, по 61px на вкладку), поэтому шрифт
+   и отступы уменьшены - иначе «Рейтинг» обрезается */
 .side-tab {
     flex: 1;
-    padding: 12px;
+    min-width: 0;
+    padding: 12px 2px;
     border: none;
     background: transparent;
     color: var(--text-muted);
     font-weight: bold;
     cursor: pointer;
     transition: all 0.2s ease;
-    font-size: 0.9em;
+    font-size: 0.78em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .side-tab.active {
@@ -60,10 +71,66 @@
     margin-bottom: 15px;
 }
 
+.online-list {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0 0;
+}
+
+.online-empty {
+    color: var(--text-muted);
+    font-size: 0.82em;
+    line-height: 1.5;
+    padding: 10px 0;
+}
+
+.online-rating {
+    font-size: 0.72em;
+    color: var(--text-muted);
+}
+
+.btn-online-bot {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 0.9em;
+    margin-bottom: 4px;
+}
+
+.btn-online-bot:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-online-challenge {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    font-size: 0.75em;
+    font-weight: 600;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--accent);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.btn-online-challenge:hover:not(:disabled) {
+    background: var(--accent);
+    color: #fff;
+}
+
+.btn-online-challenge:disabled {
+    border-color: var(--text-muted);
+    color: var(--text-muted);
+    opacity: 0.55;
+    cursor: default;
+}
+
 .online-item {
     display: flex;
     align-items: center;
-    padding: 8px 10px;
+    padding: 8px 0;
     border-bottom: 1px solid var(--border-color);
     gap: 8px;
 }
@@ -126,9 +193,18 @@
 .side-list {
     flex: 1 1 40%;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border-right: 1px solid var(--border-color);
+}
+
+/* Содержимое вкладки прокручивается, вкладки остаются на месте */
+.side-scroll {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 15px;
-    border-right: 1px solid var(--border-color);
 }
 
 .side-body.no-chat .side-list {
@@ -159,9 +235,8 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    /* Чат во всю высоту панели, ввод прижат к низу */
-    max-height: none;
-    height: 100%;
+    /* Высоту задаёт align-items: stretch в .side-body. Собственный height:100%
+       здесь не разрешается - остаётся высота содержимого, и чат схлопывается */
 }
 
 .chat-header {
