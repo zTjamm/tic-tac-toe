@@ -252,7 +252,11 @@ app.get('/api/friends', (req, res) => {
         return {
             username,
             rating: user?.rating || 1000,
-            online: onlineUsers.has(username)
+            online: onlineUsers.has(username),
+            // Занятость матчем нужна, чтобы кнопка «вызвать» не жгла
+            // игрока ошибкой «уже в игре» - в онлайне этот признак есть
+            inMatch: !!matchManager.roomOf(username),
+            strikes: matchManager.strikesOf(username)
         };
     });
 
@@ -418,6 +422,9 @@ const MAX_CHAT_HISTORY = 100;
 const BOT_RATING = 1000;
 
 const matchManager = new MatchManager(io, {
+    // Рейтинг игрока для снимка матча: клиенту нужно, чтобы объяснить,
+    // почему за эту победу дали не два очка, а три
+    ratingOf: username => (users.get(username) || {}).rating ?? BOT_RATING,
     // Финал освобождает игроков - обновляем список онлайна, иначе в нём
     // они останутся занятыми и их нельзя будет вызвать на новую игру
     onFinish: () => broadcastOnline(),
@@ -444,6 +451,13 @@ const matchManager = new MatchManager(io, {
             `${winnerUser ? winnerUser.rating : '-'}, ${loserUser ? loserUser.rating - loss : '-'}->` +
             `${loserUser ? loserUser.rating : '-'})`
         );
+
+        // Возвращаем дельты: менеджер положит их в снимок, чтобы экран
+        // итогов показал «рейтинг 1000 -> 1002», а не просто «победа»
+        const deltas = {};
+        if (winnerName) deltas[winnerName] = win;
+        if (loserName) deltas[loserName] = loss;
+        return deltas;
     }
 });
 
@@ -476,7 +490,8 @@ function onlineList() {
         list.push({
             username,
             rating: u ? u.rating : 1000,
-            inMatch: !!matchManager.roomOf(username)
+            inMatch: !!matchManager.roomOf(username),
+            strikes: matchManager.strikesOf(username)
         });
     }
     return list;

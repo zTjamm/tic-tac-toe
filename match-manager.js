@@ -17,6 +17,10 @@ const STRIKE_PUNISH_AT = STRIKE_LIMIT + 1; // 4-е нарушение = авто
 const BOT_THINK_MS = 700;
 const CLEANUP_MS = 120000;
 
+/** Рейтинг бота. Стоит 1000, как у новичка, поэтому игра с ботом
+    не двигает рейтинг: иначе новичок разгонялся бы слишком быстро. */
+const BOT_RATING = 1000;
+
 function newRoomId() {
     return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
@@ -31,6 +35,9 @@ class MatchManager {
         // после финала игрок свободен (его можно вызвать заново), но комната
         // предыдущего матча ещё помнит счёт
         this.finishedByPlayer = new Map();
+        // roomId -> { winnerId: дельта, loserId: дельта }. Живёт до конца
+        // матча в памяти, чтобы экран итогов объяснил изменение рейтинга
+        this.ratingDeltas = new Map();
         this.strikes = new Map();     // username -> number of violations
         this.botTimers = new Map();   // roomId -> timeout
     }
@@ -87,6 +94,12 @@ class MatchManager {
 
     shouldPunish(username) {
         return (this.strikes.get(username) || 0) >= STRIKE_PUNISH_AT;
+    }
+
+    /** Сколько нарушений накоплено. Показываем игроку, иначе наказание
+        за четвёртое выглядит как произвол сервера. */
+    strikesOf(username) {
+        return this.strikes.get(username) || 0;
     }
 
     clearStrikes(username) {
@@ -154,12 +167,35 @@ class MatchManager {
     /* ------------------------------ состояние ------------------------------ */
 
     broadcast(roomId, snapshot, type, extra) {
+        // Финал разбираем ДО рассылки: хук onResult пересчитывает рейтинг,
+        // и клиенту нужны дельты в том же сообщении. Иначе экран итогов
+        // показывал бы счёт раундов, но не изменение рейтинга.
+        if (type === 'finish') this.onFinish(roomId, snapshot);
+
         this.io.to(roomId).emit('match:state', {
             type: type || 'sync',
             extra: extra || null,
-            snapshot
+            snapshot: this.decorate(roomId, snapshot)
         });
-        if (type === 'finish') this.onFinish(roomId, snapshot);
+    }
+
+    /**
+     * Дополняет снимок данными, которых нет в движке матча: рейтингом и
+     * числом страйков. Рейтинг нужен, чтобы объяснить игроку, почему за
+     * победу дали не два очка, а три; страйки - чтобы наказание за
+     * четвёртое нарушение не выглядело капризом сервера.
+     */
+    decorate(roomId, snapshot) {
+        if (!this.hooks.ratingOf) return snapshot;
+        return {
+            ...snapshot,
+            players: snapshot.players.map(p => ({
+                ...p,
+                rating: p.isBot ? BOT_RATING : this.hooks.ratingOf(p.id),
+                strikes: p.isBot ? 0 : (this.strikes.get(p.id) || 0)
+            })),
+            ratingDelta: this.ratingDeltas.get(roomId) || null
+        };
     }
 
     onFinish(roomId, snapshot) {
@@ -177,7 +213,8 @@ class MatchManager {
         if (snapshot.result && snapshot.result.type === 'finished' && this.hooks.onResult) {
             const winner = players.find(p => p.id === snapshot.result.winnerId);
             const loser = players.find(p => p.id !== snapshot.result.winnerId);
-            this.hooks.onResult(winner, loser, snapshot.result);
+            // Хук возвращает дельты, чтобыdecorate() показал их игроку
+            this.ratingDeltas.set(roomId, this.hooks.onResult(winner, loser, snapshot.result) || null);
         }
 
         // Любой финал (в том числе отмена) освобождает игроков: список онлайна
@@ -202,6 +239,7 @@ class MatchManager {
             this.byPlayer.delete(p.id);
             this.finishedByPlayer.delete(p.id);
         }
+        this.ratingDeltas.delete(roomId);
         this.matches.delete(roomId);
         const t = this.botTimers.get(roomId);
         if (t) clearTimeout(t);
