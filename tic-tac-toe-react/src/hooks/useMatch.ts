@@ -85,6 +85,9 @@ export function useMatch(username: string) {
         socket.on('match:state', (msg: MatchStateMessage) => {
             roomRef.current = msg.snapshot.roomId;
             setSnapshot(msg.snapshot);
+            // Матч начался, значит вызов принят. Иначе кнопка «вызвать»
+            // навсегда оставалась в состоянии «ждём» до следующей попытки
+            if (msg.snapshot.phase !== 'finished') setPendingTarget(null);
             if (msg.type === 'roundEnd' && msg.extra) {
                 setLastRoundEnd(msg.extra);
                 // Сервер отдаёт клетки выигрышной линии - доска их подсветит.
