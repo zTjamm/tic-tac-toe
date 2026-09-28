@@ -87,6 +87,61 @@
     box-shadow: 0 4px 12px rgba(194, 24, 91, 0.4);
 }
 
+/* Итог раунда под таймером: раньше очки просто менялись справа, и было
+   непонятно, кто их заработал */
+.round-result {
+    margin-top: 8px;
+    padding: 8px 12px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    border-radius: 10px;
+    font-size: 0.88em;
+    background: var(--score-bg);
+    color: var(--text-muted);
+    animation: rr-in 0.25s ease;
+}
+
+@keyframes rr-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.round-result .rr-label {
+    flex: 0 0 auto;
+    font-weight: 700;
+    color: var(--text-color);
+}
+
+.round-result-attacker .rr-text {
+    color: var(--x-color);
+}
+
+.round-result-defender .rr-text {
+    color: var(--o-color);
+}
+
+.round-result-draw .rr-text {
+    color: var(--draw-color);
+}
+
+/* Потеря связи: игрок должен понимать, что доска не зависла */
+.conn-warning {
+    margin-top: 8px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    font-size: 0.85em;
+    line-height: 1.4;
+    color: var(--draw-color);
+    background: var(--draw-bg);
+}
+
 .match-cancelled {
     font-weight: 700;
     color: var(--draw-color);

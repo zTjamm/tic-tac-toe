@@ -140,37 +140,72 @@ body {
     flex-wrap: wrap;
 }
 
-.btn-top {
-    flex: 0 0 auto;
-    min-width: 0;
-    padding: 8px 14px;
-    font-size: 0.85em;
-    border-radius: 8px;
+/* Квадратная кнопка: иконка сверху, короткая подпись снизу.
+   Одинаковая ширина и высота у всех - панель не прыгает, а на телефоне
+   четыре квадрата помещаются в один ряд */
+.btn-square {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 58px;
+    height: 58px;
+    padding: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--container-bg);
+    color: var(--text-color);
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
-.btn-top:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
+.btn-square .ico {
+    font-size: 1.25em;
+    line-height: 1;
 }
 
-.btn-icon {
-    width: 40px;
-    padding: 8px 0;
-    text-align: center;
-    font-size: 1em;
-}
-
-.btn-logout {
-    background: transparent;
-    border: 2px solid var(--accent);
-    color: var(--accent);
-}
-
-.btn-logout:disabled {
-    border-color: var(--text-muted);
+.btn-square .cap {
+    font-size: 0.68em;
+    font-weight: 600;
     color: var(--text-muted);
+}
+
+.btn-square:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
+    border-color: var(--accent);
+}
+
+.btn-square:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.btn-square-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.btn-square-primary .ico,
+.btn-square-primary .cap {
+    color: #fff;
+}
+
+/* Выход - не главное действие, поэтому приглушённый */
+.btn-square-ghost {
+    background: transparent;
+}
+
+@media (max-width: 520px) {
+    .btn-square {
+        width: 52px;
+        height: 52px;
+    }
+
+    .btn-square .cap {
+        font-size: 0.62em;
+    }
 }
 
 .btn-logout:hover:not(:disabled) {

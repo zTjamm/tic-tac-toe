@@ -39,6 +39,16 @@ const Scoreboard: React.FC<ScoreboardProps> = ({ snapshot, myId }) => {
                             {p.id === myId ? ' (вы)' : ''}
                         </span>
                         <span className="value">{p.score}</span>
+                        {/* Страйки видны, иначе автопроигрыш за четвёртое
+                            нарушение выглядит как произвол сервера */}
+                        {p.strikes > 0 && (
+                            <span
+                                className={`strikes ${p.strikes >= 2 ? 'is-danger' : ''}`}
+                                title={`нарушений: ${p.strikes} из 4`}
+                            >
+                                {p.strikes}/3
+                            </span>
+                        )}
                         {!p.connected && <span className="offline">нет связи</span>}
                     </div>
                 ))}

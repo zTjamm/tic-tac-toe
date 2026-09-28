@@ -8,6 +8,7 @@ import AuthModal from './components/AuthModal';
 import SidePanel from './components/SidePanel';
 import ChallengeDialog from './components/ChallengeDialog';
 import { clearToken } from './api';
+import { setSoundEnabled } from './signals';
 import './App.css';
 
 const App: React.FC = () => {
@@ -15,6 +16,7 @@ const App: React.FC = () => {
     const [showAuth, setShowAuth] = useState(true);
     const [username, setUsername] = useState('');
     const [token, setToken] = useState<string>('');
+    const [soundOn, setSoundOn] = useState(true);
 
     const match = useMatch(username);
     const { snapshot, startBotMatch, syncMatch, pickNumber, chooseRole, makeMove,
@@ -26,12 +28,18 @@ const App: React.FC = () => {
     useEffect(() => {
         const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
         if (savedTheme) setTheme(savedTheme);
+        setSoundOn(localStorage.getItem('sound') !== 'off');
     }, []);
 
     useEffect(() => {
         document.documentElement.setAttribute('data-theme', theme);
         localStorage.setItem('theme', theme);
     }, [theme]);
+
+    useEffect(() => {
+        setSoundEnabled(soundOn);
+        localStorage.setItem('sound', soundOn ? 'on' : 'off');
+    }, [soundOn]);
 
     // Восстанавливаем сессию после перезагрузки
     useEffect(() => {
@@ -118,6 +126,8 @@ const App: React.FC = () => {
                 canStart={!inMatch && match.connected}
                 onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
                 onStartBot={startBotMatch}
+                onToggleSound={() => setSoundOn(v => !v)}
+                soundOn={soundOn}
                 onLogout={handleLogout}
             />
 
@@ -128,6 +138,8 @@ const App: React.FC = () => {
                         <Countdown
                             snapshot={snapshot}
                             myId={myId}
+                            roundEnd={match.lastRoundEnd}
+                            offline={!match.connected}
                             onChooseRole={chooseRole}
                         />
                         {/* Итог показываем над доской: кнопки реванша и выхода
@@ -164,7 +176,7 @@ const App: React.FC = () => {
                 pendingTarget={match.pendingTarget}
                 onSendChat={match.sendChat}
                 onChallenge={match.sendChallenge}
-                onStartBot={startBotMatch}
+                onCancelChallenge={match.cancelChallenge}
                 onAddFriend={match.addFriend}
                 onRemoveFriend={match.removeFriend}
                 loadFriends={match.loadFriends}
@@ -189,32 +201,60 @@ interface TopBarProps {
     canStart: boolean;
     onToggleTheme: () => void;
     onStartBot: () => void;
+    onToggleSound: () => void;
+    soundOn: boolean;
     onLogout: () => void;
 }
 
+/**
+ * Верхняя панель. Кнопки квадратные: иконка сверху, короткая подпись
+ * снизу. Раньше «Игра против бота» переносилась на две строки, от чего
+ * панель меняла высоту, а кнопки разной ширины разъезжались.
+ */
 const TopBar: React.FC<TopBarProps> = ({
     username,
     theme,
     canStart,
     onToggleTheme,
     onStartBot,
+    onToggleSound,
+    soundOn,
     onLogout
 }) => (
     <div className="top-bar">
         <span className="top-bar-title">Крестики-нолики</span>
         <div className="top-bar-actions">
-            <button className="btn btn-top" onClick={onStartBot} disabled={!canStart}>
-                Игра против бота
+            <button
+                className="btn-square btn-square-primary"
+                onClick={onStartBot}
+                disabled={!canStart}
+                title={canStart ? 'Игра против бота' : 'Нельзя начать матч во время игры'}
+            >
+                <span className="ico">🎮</span>
+                <span className="cap">Бот</span>
             </button>
             <button
-                className="btn btn-top btn-icon"
+                className="btn-square"
                 onClick={onToggleTheme}
                 title="Сменить тему"
             >
-                {theme === 'light' ? '🌙' : '☀️'}
+                <span className="ico">{theme === 'light' ? '🌙' : '☀️'}</span>
+                <span className="cap">Тема</span>
             </button>
             <button
-                className="btn btn-top btn-logout"
+                className="btn-square"
+                onClick={onToggleSound}
+                title={
+                    soundOn
+                        ? 'Выключить звук о ходе'
+                        : 'Включить звук о ходе'
+                }
+            >
+                <span className="ico">{soundOn ? '🔊' : '🔇'}</span>
+                <span className="cap">Звук</span>
+            </button>
+            <button
+                className="btn-square btn-square-ghost"
                 onClick={onLogout}
                 disabled={!canStart}
                 title={
@@ -223,7 +263,8 @@ const TopBar: React.FC<TopBarProps> = ({
                         : 'Нельзя выйти во время матча или без связи с сервером'
                 }
             >
-                Выход
+                <span className="ico">🚪</span>
+                <span className="cap">Выход</span>
             </button>
         </div>
         <span className="top-bar-user">{username}</span>

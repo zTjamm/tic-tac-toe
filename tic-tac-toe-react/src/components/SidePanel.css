@@ -9,10 +9,11 @@
     overflow: hidden;
 }
 
-/* Когда игра открыта, панель занимает колонку рядом с доской */
+/* Когда игра открыта, панель занимает колонку рядом с доской.
+   Списку отдаём меньше места: чат читают свободнее, чем сканируют ники */
 .app.with-game .side-panel {
-    flex: 1 1 340px;
-    max-width: 460px;
+    flex: 1 1 320px;
+    max-width: 420px;
     align-self: stretch;
 }
 
@@ -133,7 +134,7 @@
 }
 
 /* Строка игрока: точка, ник с рейтингом и кнопка вызова.
-   В матче колонка узкая (≈185px), поэтому ник переносится, а не сжимается */
+   В матче колонка узкая (≈160px), поэтому ник переносится, а не сжимается */
 .online-row {
     display: flex;
     align-items: center;
@@ -145,8 +146,59 @@
     min-width: 0;
 }
 
+/* Себя нельзя ни вызвать, ни добавить в друзья, поэтому строка без кнопок */
+.online-item.is-self {
+    background: var(--score-bg);
+    border-radius: 8px;
+    padding: 8px;
+    margin: 0 -8px;
+}
+
+.you-tag {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 0.7em;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--container-bg);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    vertical-align: middle;
+}
+
+/* Страйки видны игроку: без них наказание за четвёртое нарушение
+   выглядит как произвол сервера */
+.strike-tag {
+    display: inline-block;
+    margin-left: 5px;
+    padding: 0 5px;
+    font-size: 0.9em;
+    font-weight: 600;
+    color: var(--draw-color);
+    background: var(--draw-bg);
+    border-radius: 6px;
+    white-space: nowrap;
+}
+
+.leaderboard-note {
+    margin-top: 12px;
+}
+
 .online-dot.offline {
     background: #9aa0b4;
+}
+
+/* Отозвать вызов: тот же размер, но приглушённый, чтобы читалось
+   как отмена, а не как новое действие */
+.btn-online-challenge.is-pending {
+    border-color: var(--draw-color);
+    color: var(--draw-color);
+}
+
+.btn-online-challenge.is-pending:hover {
+    background: var(--draw-bg);
+    color: var(--draw-color);
 }
 
 /* Кнопка «+ в друзья» на всю ширину строки: в узкой колонке
@@ -302,7 +354,7 @@
 }
 
 .side-list {
-    flex: 1 1 40%;
+    flex: 1 1 38%;
     min-width: 0;
     display: flex;
     flex-direction: column;

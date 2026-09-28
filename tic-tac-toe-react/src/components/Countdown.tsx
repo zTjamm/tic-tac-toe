@@ -1,19 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { MatchSnapshot } from '../types';
+import type { MatchSnapshot, RoundEndInfo } from '../types';
 import './Countdown.css';
 
 interface CountdownProps {
     snapshot: MatchSnapshot | null;
     myId: string | null;
+    /** итог последнего раунда: кто выиграл и сколько очков за это */
+    roundEnd: RoundEndInfo | null;
+    /** оборвалась ли связь с сервером */
+    offline: boolean;
     onChooseRole: (attack: boolean) => void;
 }
 
 /**
- * Панель состояния матча: отсчёты, подсказка «ваш ход» и выбор роли
- * победителем угадайки. Дедлайны приходят с сервера, локально только
- * пересчитываем остаток раз в 200 мс.
+ * Панель состояния матча: отсчёты, подсказка «ваш ход», выбор роли
+ * победителем угадайки и итог прошедшего раунда. Дедлайны приходят с
+ * сервера, локально только пересчитываем остаток раз в 200 мс.
  */
-const Countdown: React.FC<CountdownProps> = ({ snapshot, myId, onChooseRole }) => {
+const Countdown: React.FC<CountdownProps> = ({
+    snapshot,
+    myId,
+    roundEnd,
+    offline,
+    onChooseRole
+}) => {
     const [now, setNow] = useState(() => Date.now());
     const [, force] = useState(0);
 
@@ -44,6 +54,7 @@ const Countdown: React.FC<CountdownProps> = ({ snapshot, myId, onChooseRole }) =
     const me = players.find(p => p.id === myId) || null;
     const myMark = me ? me.mark : null;
     const isMyTurn = phase === 'playing' && myMark !== null && snapshot.currentMark === myMark;
+    const opponentOffline = players.some(p => p.id !== myId && !p.connected);
 
     const deadline = phase === 'playing' ? turnDeadline : guessing ? guessing.deadline : null;
     const left = deadline ? Math.max(0, Math.ceil((deadline - now) / 1000)) : null;
@@ -104,6 +115,29 @@ const Countdown: React.FC<CountdownProps> = ({ snapshot, myId, onChooseRole }) =
                 </div>
             )}
 
+            {/* Итог раунда: без него игрок видит, как изменился счёт, но не
+                понимает почему. Правила +2/+3/+1 приходилось держать в голове */}
+            {roundEnd && phase === 'playing' && (
+                <div className={`round-result round-result-${roundEnd.outcome}`}>
+                    <span className="rr-label">Раунд {snapshot.round - 1}</span>
+                    <span className="rr-text">{roundResultText(roundEnd, me?.isAttacker ?? false)}</span>
+                </div>
+            )}
+
+            {/* Связь: без баннера игрок смотрит на застывшую доску и не
+                понимает, что матч вот-вот отменят */}
+            {offline && (
+                <div className="conn-warning">
+                    Нет связи с сервером, переподключаемся. Матч отменится,
+                    если не вернуться вовремя.
+                </div>
+            )}
+            {!offline && opponentOffline && phase !== 'finished' && (
+                <div className="conn-warning">
+                    Соперник отключился. У него {snapshot.timing.turn} с на возврат в игру.
+                </div>
+            )}
+
             {phase === 'finished' && result && (
                 <div className="countdown-body">
                     {/* Подробности показывает MatchResult ниже, здесь только
@@ -127,12 +161,21 @@ function reasonText(reason?: string): string {
         case 'disconnect':
             return 'разрыв связи';
         case 'strike':
-            return 'автопроигрыш за три нарушения';
+            return 'автопроигрыш: четыре нарушения';
         case 'score':
             return 'набрано 5 очков';
         default:
             return 'причина неизвестна';
     }
+}
+
+/** Человеческая формулировка исхода раунда вместе с очками. */
+function roundResultText(end: RoundEndInfo, iAmAttacker: boolean): string {
+    if (end.outcome === 'draw') return 'ничья: защитнику +1 очко';
+    if (end.outcome === 'attacker') {
+        return iAmAttacker ? 'вы атаковали и выиграли раунд: +2 очка' : 'атакующий выиграл раунд: +2 очка';
+    }
+    return iAmAttacker ? 'вы защищались и проиграли: +3 очка сопернику' : 'вы защищались и выиграли: +3 очка';
 }
 
 export default Countdown;

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
 import { apiFetch } from '../api';
+import { playMyTurn, playRoundEnd, setTitle } from '../signals';
 import type {
     MatchSnapshot,
     MatchStateMessage,
@@ -93,12 +94,16 @@ export function useMatch(username: string) {
                 // Сервер отдаёт клетки выигрышной линии - доска их подсветит.
                 // При ничьей winPattern равен null
                 setWinPattern(msg.extra.winPattern);
+                playRoundEnd();
             }
-            // Начался новый раунд - линии прошлого на доске уже нет
+            // Начался новый раунд - линии прошлого на доске уже нет.
+            // lastRoundEnd здесь НЕ трогаем: движок шлёт roundEnd, а следом
+            // сразу roundStart, и обнуление в том же тике убивало плашку
+            // с итогом раунда раньше, чем она успевала отрисоваться
             if (msg.type === 'roundStart' || msg.type === 'guessStart') {
-                setLastRoundEnd(null);
                 setWinPattern(null);
             }
+            announce(msg.snapshot, usernameRef.current);
         });
 
         socket.on('globalChatMessage', (msg: ChatMessage) => {
@@ -151,6 +156,7 @@ export function useMatch(username: string) {
             setRematchRequest(null);
             setPendingTarget(null);
             setNotice(`${data.by} вышел из матча`);
+            resetSignals();
         });
 
         return () => {
@@ -200,6 +206,7 @@ export function useMatch(username: string) {
         setSnapshot(null);
         setLastRoundEnd(null);
         setWinPattern(null);
+        resetSignals();
     }, []);
 
     /* ------------------------ выход из матча ------------------------ */
@@ -212,6 +219,7 @@ export function useMatch(username: string) {
         setLastRoundEnd(null);
         setWinPattern(null);
         setPendingTarget(null);
+        resetSignals();
     }, []);
 
     /* ------------------------- вызов на игру ------------------------- */
@@ -249,6 +257,16 @@ export function useMatch(username: string) {
         },
         [incoming]
     );
+
+    /**
+     * Отзыв отправленного вызова. Раньше его было некуда отозвать: кнопка
+     * висела в «ждём» до следующей попытки вызвать кого-то другого.
+     */
+    const cancelChallenge = useCallback(() => {
+        if (!pendingTarget) return;
+        setNotice(`Вызов ${pendingTarget} отозван`);
+        setPendingTarget(null);
+    }, [pendingTarget]);
 
     /* --------------------------- реванш --------------------------- */
 
@@ -350,6 +368,7 @@ export function useMatch(username: string) {
         requestRematch,
         respondRematch,
         leaveMatch,
+        cancelChallenge,
         loadFriends,
         loadLeaderboard,
         addFriend,
@@ -360,4 +379,41 @@ export function useMatch(username: string) {
 
 function keyOf(m: ChatMessage) {
     return `${m.sender}|${m.text}|${m.timestamp}`;
+}
+
+/** Ключ последнего сигнала «ваш ход», чтобы не пищать на каждом снимке */
+let lastMyTurnKey = '';
+
+function resetSignals() {
+    lastMyTurnKey = '';
+    setTitle('menu');
+}
+
+/**
+ * Ставит заголовок вкладки и пищит, когда очередь перешла к игроку.
+ * Отслеживает именно переход, а не сам факт: иначе сигнал повторялся бы
+ * на каждом снимке, то есть несколько раз в секунду.
+ */
+function announce(snapshot: MatchSnapshot, myId: string) {
+    if (snapshot.phase === 'finished') {
+        setTitle('finished');
+        return;
+    }
+    const me = snapshot.players.find(p => p.id === myId);
+    const myTurn =
+        snapshot.phase === 'playing' &&
+        me !== undefined &&
+        snapshot.currentMark === me.mark;
+
+    setTitle(myTurn ? 'myTurn' : 'playing');
+
+    if (myTurn) {
+        const key = `${snapshot.roomId}:${snapshot.round}:${snapshot.currentMark}`;
+        if (key !== lastMyTurnKey) {
+            lastMyTurnKey = key;
+            playMyTurn();
+        }
+    } else {
+        lastMyTurnKey = '';
+    }
 }

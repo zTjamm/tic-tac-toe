@@ -85,6 +85,25 @@
     margin-top: 4px;
 }
 
+/* Счётчик нарушений в табло */
+.score .strikes {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 0.65em;
+    font-weight: 700;
+    color: var(--draw-color);
+    background: var(--draw-bg);
+    border-radius: 8px;
+    vertical-align: middle;
+}
+
+/* Два нарушения из трёх - предупреждение перед автопроигрышем */
+.score .strikes.is-danger {
+    color: #fff;
+    background: var(--o-color);
+}
+
 .scoreboard-hint {
     text-align: center;
     font-size: 0.8em;

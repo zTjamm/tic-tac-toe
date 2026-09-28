@@ -65,6 +65,41 @@
     background: var(--win-bg);
 }
 
+/* Разбор изменения рейтинга */
+.rating-change {
+    margin-top: 10px;
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 0.9em;
+    color: var(--text-muted);
+}
+
+.rating-change.is-up .rc-amount {
+    color: var(--win-color);
+    font-weight: 700;
+}
+
+.rating-change.is-down .rc-amount {
+    color: var(--o-color);
+    font-weight: 700;
+}
+
+.rating-change .rc-flow {
+    padding: 1px 7px;
+    border-radius: 8px;
+    background: var(--score-bg);
+    color: var(--text-color);
+    font-size: 0.9em;
+}
+
+.rating-change .rc-why {
+    font-size: 0.85em;
+    font-style: italic;
+}
+
 .result-player .name {
     font-size: 0.9em;
     color: var(--text-color);
@@ -84,8 +119,7 @@
     margin-bottom: 14px;
 }
 
-.match-result-actions {
-    display: flex;
+.match-result-actions {    display: flex;
     gap: 10px;
     justify-content: center;
     flex-wrap: wrap;

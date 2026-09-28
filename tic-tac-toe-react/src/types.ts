@@ -41,6 +41,10 @@ export interface MatchPlayer {
     pick: number | null;
     isAttacker: boolean;
     isGuessWinner: boolean;
+    /** рейтинг до матча: по нему объясняется размер изменения */
+    rating: number;
+    /** накопленные нарушения; 3 означает, что следующее приведёт к автопроигрышу */
+    strikes: number;
 }
 
 export interface Guessing {
@@ -78,6 +82,8 @@ export interface MatchSnapshot {
         guessRole: number;
         turn: number;
     };
+    /** изменение рейтинга по игрокам при финале; null пока матч не закончен */
+    ratingDelta: Record<string, number> | null;
 }
 
 export interface MatchStateMessage {
@@ -98,4 +104,15 @@ export interface OnlineUser {
     rating: number;
     /** уже в матче — вызов ему недоступен */
     inMatch: boolean;
+    /** накопленные нарушения, чтобы видеть, кто рискует автопроигрышем */
+    strikes: number;
+}
+
+/** Друг из /api/friends: сервер хранит дружбу взаимной. */
+export interface Friend {
+    username: string;
+    rating: number;
+    online: boolean;
+    inMatch: boolean;
+    strikes: number;
 }

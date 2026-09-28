@@ -77,6 +77,8 @@ const MatchResult: React.FC<MatchResultProps> = ({
                 {opponent ? ` · соперник: ${opponent.username}` : ''}
             </div>
 
+            <RatingChange snapshot={snapshot} myId={myId} />
+
             <div className="match-result-actions">
                 <button
                     className="btn"
@@ -103,12 +105,69 @@ function reasonText(reason?: string): string {
         case 'disconnect':
             return 'разрыв связи не восстановился';
         case 'strike':
-            return 'автопроигрыш: три нарушения подряд';
+            return 'автопроигрыш: четыре нарушения';
         case 'score':
             return 'набрано 5 очков';
         default:
             return '';
     }
 }
+
+/**
+ * Разбор изменения рейтинга. Формула учитывает силу соперника, поэтому
+ * «+3» вместо привычных «+2» выглядит ошибкой, если не сказать почему.
+ *
+ * В снимке финала рейтинг УЖЕ обновлён (хук onResult отработал до
+ * рассылки), поэтому значение «до» восстанавливаем вычитанием дельты.
+ */
+const RatingChange: React.FC<{ snapshot: MatchSnapshot; myId: string | null }> = ({
+    snapshot,
+    myId
+}) => {
+    const { players, ratingDelta } = snapshot;
+    if (snapshot.result?.type !== 'finished' || !ratingDelta || !myId) return null;
+
+    const me = players.find(p => p.id === myId) || null;
+    if (!me || me.isBot) return null;
+    const delta = ratingDelta[myId];
+    if (typeof delta !== 'number' || delta === 0) return null;
+
+    const opponent = players.find(p => p.id !== myId) || null;
+    const before = me.rating - delta;
+    // У бота дельты нет, но рейтинг у него настоящий (1000) - снимок его
+    // отдаёт, и сравнение с ним осмысленно
+    const oppDelta = opponent ? ratingDelta[opponent.id] ?? 0 : 0;
+    const oppBefore = opponent ? opponent.rating - oppDelta : 0;
+
+    // Разрыв считаем по рейтингам ДО матча - именно он влиял на очки
+    const gap = opponent ? before - oppBefore : 0;
+    const absGap = Math.abs(gap);
+    const sign = delta > 0 ? '+' : '';
+
+    let why = '';
+    if (opponent && opponent.isBot) {
+        why = ' · матч против бота (рейтинг 1000)';
+    } else if (absGap >= 100) {
+        why =
+            gap > 0
+                ? ` · вы были сильнее на ${absGap}`
+                : ` · соперник был сильнее на ${absGap}`;
+    } else {
+        why = ' · равные рейтинги';
+    }
+
+    return (
+        <div className={`rating-change ${delta > 0 ? 'is-up' : 'is-down'}`}>
+            <span className="rc-amount">
+                рейтинг {sign}
+                {delta}
+            </span>
+            <span className="rc-flow">
+                {before} → {me.rating}
+            </span>
+            <span className="rc-why">{why}</span>
+        </div>
+    );
+};
 
 export default MatchResult;
