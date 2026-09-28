@@ -70,6 +70,12 @@ const App: React.FC = () => {
     }, []);
 
     const handleLogin = (user: string, accessToken: string) => {
+        // Токен пишем сразу, а не в эффекте. Иначе в том же проходе
+        // отрисовки эффект useMatch успевает запросить /api/friends
+        // (username уже установлен) ещё до записи токена, получает 401
+        // и выкидывает только что вошедшего игрока на экран входа
+        localStorage.setItem('token', accessToken);
+        localStorage.setItem('username', user);
         setUsername(user);
         setToken(accessToken);
         setShowAuth(false);

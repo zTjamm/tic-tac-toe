@@ -45,7 +45,12 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
         body: payload
     });
 
-    if (res.status === 401 && !options.anonymous) {
+    // Разлогинивать имеет смысл, только если токен действительно был
+    // предъявлен и сервер его отверг. 401 без токена - это не истёкшая
+    // сессия: сразу после входа состояние React уже обновилось, а токен
+    // ещё не записан в localStorage, и первый запрос уходил без него
+    const sentToken = !!headers.Authorization;
+    if (res.status === 401 && !options.anonymous && sentToken) {
         notifyExpired();
     }
 
