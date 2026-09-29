@@ -61,93 +61,116 @@ const Countdown: React.FC<CountdownProps> = ({
 
     return (
         <div className={`countdown countdown-${phase}`}>
-            {left !== null && <span className="countdown-timer">{left}</span>}
+            {/* Таймер и текст живут в отдельном ряду. Раньше всё было в одну
+                строку flex, и два слота по 100% ширины выдавливали текст в
+                ноль - игрок не видел «выберите число» и не понимал, почему
+                кнопки не работают */}
+            <div className="countdown-top">
+                {left !== null && <span className="countdown-timer">{left}</span>}
 
-            {phase === 'guessing' && guessing && (
-                <div className="countdown-body">
-                    {guessing.sub === 'countdown' && (
-                        <span>Приготовьтесь выбрать число ({left} с)</span>
-                    )}
-                    {guessing.sub === 'picking' && (
-                        <span>
-                            {me && me.pick !== null
-                                ? 'Число выбрано, ждём соперника'
-                                : 'Выберите число от 1 до 9 на доске'}
-                        </span>
-                    )}
-                    {guessing.sub === 'reveal' && (
-                        <span>
-                            Системное число: <b>{guessing.systemNumber ?? '—'}</b>
-                        </span>
-                    )}
-                </div>
-            )}
+                {phase === 'guessing' && guessing && (
+                    <div className="countdown-body">
+                        {guessing.sub === 'countdown' && (
+                            <span>Приготовьтесь выбрать число ({left} с)</span>
+                        )}
+                        {guessing.sub === 'picking' && (
+                            <span>
+                                {me && me.pick !== null
+                                    ? 'Число выбрано, ждём соперника'
+                                    : 'Выберите число от 1 до 9 на доске'}
+                            </span>
+                        )}
+                        {guessing.sub === 'reveal' && (
+                            <span>
+                                Системное число: <b>{guessing.systemNumber ?? '—'}</b>
+                            </span>
+                        )}
+                    </div>
+                )}
 
-            {phase === 'roleChoice' && guessing && (
-                <div className="countdown-body">
-                    {guessing.winnerId === myId ? (
-                        <div className="role-choice">
-                            <span>Вы ближе к загаданному числу. Выбирайте роль:</span>
-                            <div className="role-buttons">
-                                <button className="btn" onClick={() => onChooseRole(true)}>
-                                    Атаковать (X)
-                                </button>
-                                <button className="btn btn-role-defend" onClick={() => onChooseRole(false)}>
-                                    Защищаться (O)
-                                </button>
+                {phase === 'roleChoice' && guessing && (
+                    <div className="countdown-body">
+                        {guessing.winnerId === myId ? (
+                            <div className="role-choice">
+                                <span>Вы ближе к загаданному числу. Выбирайте роль:</span>
+                                <div className="role-buttons">
+                                    <button className="btn" onClick={() => onChooseRole(true)}>
+                                        Атаковать (X)
+                                    </button>
+                                    <button
+                                        className="btn btn-role-defend"
+                                        onClick={() => onChooseRole(false)}
+                                    >
+                                        Защищаться (O)
+                                    </button>
+                                </div>
                             </div>
-                        </div>
-                    ) : (
-                        <span>Соперник выбирает роль…</span>
-                    )}
-                </div>
-            )}
+                        ) : (
+                            <span>Соперник выбирает роль…</span>
+                        )}
+                    </div>
+                )}
 
-            {phase === 'playing' && (
-                <div className="countdown-body">
-                    {isMyTurn ? (
-                        <span className="your-turn">Ваш ход ({left} с)</span>
-                    ) : (
-                        <span>
-                            Ход соперника ({snapshot.players.find(p => p.mark === snapshot.currentMark)?.username})
+                {phase === 'playing' && (
+                    <div className="countdown-body">
+                        {isMyTurn ? (
+                            <span className="your-turn">Ваш ход ({left} с)</span>
+                        ) : (
+                            <span>
+                                Ход соперника (
+                                {snapshot.players.find(p => p.mark === snapshot.currentMark)
+                                    ?.username}
+                                )
+                            </span>
+                        )}
+                    </div>
+                )}
+
+                {phase === 'finished' && result && (
+                    <div className="countdown-body">
+                        {/* Подробности показывает MatchResult выше, здесь только
+                            короткая строка, чтобы не дублировать */}
+                        <span className="match-winner">
+                            Матч окончен
+                            {result.type === 'cancelled' ? ` — ${reasonText(result.reason)}` : ''}
                         </span>
-                    )}
-                </div>
-            )}
+                    </div>
+                )}
+            </div>
 
             {/* Итог раунда: без него игрок видит, как изменился счёт, но не
-                понимает почему. Правила +2/+3/+1 приходилось держать в голове */}
-            {roundEnd && phase === 'playing' && (
-                <div className={`round-result round-result-${roundEnd.outcome}`}>
-                    <span className="rr-label">Раунд {snapshot.round - 1}</span>
-                    <span className="rr-text">{roundResultText(roundEnd, me?.isAttacker ?? false)}</span>
-                </div>
-            )}
+                понимает почему. Правила +2/+3/+1 приходилось держать в голове.
+
+                Слот рисуется всегда, пока есть матч, и имеет ФИКСИРОВАННУЮ
+                высоту. Раньше он появлялся вместе с плашкой и менял высоту
+                по длине текста - 36, потом 101, потом 84 пикселя, и каждый
+                раз доска прыгала вниз сразу после хода игрока */}
+            <div className="round-slot">
+                {roundEnd && phase === 'playing' && (
+                    <div className={`round-result round-result-${roundEnd.outcome}`}>
+                        <span className="rr-label">Раунд {snapshot.round - 1}</span>
+                        <span className="rr-text">
+                            {roundResultText(roundEnd, me?.isAttacker ?? false)}
+                        </span>
+                    </div>
+                )}
+            </div>
 
             {/* Связь: без баннера игрок смотрит на застывшую доску и не
-                понимает, что матч вот-вот отменят */}
-            {offline && (
-                <div className="conn-warning">
-                    Нет связи с сервером, переподключаемся. Матч отменится,
-                    если не вернуться вовремя.
-                </div>
-            )}
-            {!offline && opponentOffline && phase !== 'finished' && (
-                <div className="conn-warning">
-                    Соперник отключился. У него {snapshot.timing.turn} с на возврат в игру.
-                </div>
-            )}
-
-            {phase === 'finished' && result && (
-                <div className="countdown-body">
-                    {/* Подробности показывает MatchResult ниже, здесь только
-                        короткая строка, чтобы не дублировать */}
-                    <span className="match-winner">
-                        Матч окончен
-                        {result.type === 'cancelled' ? ` — ${reasonText(result.reason)}` : ''}
-                    </span>
-                </div>
-            )}
+                понимает, что матч вот-вот отменят. Тоже в слоте с резервом */}
+            <div className="warn-slot">
+                {offline ? (
+                    <div className="conn-warning">
+                        Нет связи с сервером, переподключаемся. Матч отменится,
+                        если не вернуться вовремя.
+                    </div>
+                ) : opponentOffline && phase !== 'finished' ? (
+                    <div className="conn-warning">
+                        Соперник отключился. У него {snapshot.timing.turn} с на возврат
+                        в игру.
+                    </div>
+                ) : null}
+            </div>
         </div>
     );
 }
@@ -169,13 +192,17 @@ function reasonText(reason?: string): string {
     }
 }
 
-/** Человеческая формулировка исхода раунда вместе с очками. */
+/**
+ * Человеческая формулировка исхода раунда вместе с очками.
+ * Держим короткой: длинный текст переносился на несколько строк и
+ * растягивал плашку, а та двигала доску.
+ */
 function roundResultText(end: RoundEndInfo, iAmAttacker: boolean): string {
-    if (end.outcome === 'draw') return 'ничья: защитнику +1 очко';
+    if (end.outcome === 'draw') return 'ничья: +1 защитнику';
     if (end.outcome === 'attacker') {
-        return iAmAttacker ? 'вы атаковали и выиграли раунд: +2 очка' : 'атакующий выиграл раунд: +2 очка';
+        return iAmAttacker ? 'вы атаковали и выиграли: +2' : 'атакующий выиграл: +2';
     }
-    return iAmAttacker ? 'вы защищались и проиграли: +3 очка сопернику' : 'вы защищались и выиграли: +3 очка';
+    return iAmAttacker ? 'вы проиграли защиту: +3 сопернику' : 'вы защитились и выиграли: +3';
 }
 
 export default Countdown;

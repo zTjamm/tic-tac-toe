@@ -66,7 +66,7 @@ const Board: React.FC<BoardProps> = ({
         <div
             className={`board ${inGuessing ? 'board-guessing' : ''} ${
                 waiting ? 'waiting' : ''
-            } ${phase === 'finished' ? 'board-finished' : ''}`}
+            }`}
         >
             {Array.from({ length: 9 }).map((_, index) => {
                 if (inGuessing) {

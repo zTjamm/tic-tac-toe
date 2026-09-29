@@ -1,9 +1,11 @@
+/* Колонка: таймер с текстом сверху, плашки под ними. Пытались держать
+   всё в одной строке flex - два слота по 100% ширины выдавили текст в
+   ноль, и игрок не видел «выберите число» */
 .countdown {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 12px;
-    flex-wrap: wrap;
+    gap: 6px;
     text-align: center;
     padding: 12px 15px;
     border-radius: 10px;
@@ -12,6 +14,28 @@
     margin-bottom: 16px;
     min-height: 54px;
     font-size: 0.95em;
+}
+
+.countdown-top {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 38px;
+}
+
+/* Текст очереди не переносим: «Ход соперника (длинный_ник)» занимал
+   две строки, и каждый переход хода сдвигал доску вниз на 13px */
+.countdown-body {
+    min-width: 0;
+    max-width: 100%;
+}
+
+.countdown-top .countdown-body {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .countdown-idle {
@@ -87,10 +111,40 @@
     box-shadow: 0 4px 12px rgba(194, 24, 91, 0.4);
 }
 
+/* Слоты с ФИКСИРОВАННОЙ высотой. Плашки появляются и исчезают по ходу
+   матча, и каждое появление сдвигало доску вниз */
+.round-slot {
+    width: 100%;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+}
+
+.warn-slot {
+    width: 100%;
+    height: 0;
+    overflow: hidden;
+    transition: height 0.2s ease;
+}
+
+.warn-slot:not(:empty) {
+    height: 46px;
+}
+
+/* Выбор роли: подпись и кнопки в столбик, чтобы не растягивать панель */
+.role-choice {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+}
+
 /* Итог раунда под таймером: раньше очки просто менялись справа, и было
    непонятно, кто их заработал */
 .round-result {
-    margin-top: 8px;
+    width: 100%;
+    margin-top: 0;
     padding: 8px 12px;
     display: flex;
     align-items: baseline;
@@ -100,6 +154,14 @@
     background: var(--score-bg);
     color: var(--text-muted);
     animation: rr-in 0.25s ease;
+    /* текст не переносим: перенос растягивал плашку, а та двигала доску */
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.round-result .rr-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 @keyframes rr-in {
@@ -133,7 +195,7 @@
 
 /* Потеря связи: игрок должен понимать, что доска не зависла */
 .conn-warning {
-    margin-top: 8px;
+    margin-top: 0;
     padding: 8px 12px;
     border-radius: 10px;
     font-size: 0.85em;

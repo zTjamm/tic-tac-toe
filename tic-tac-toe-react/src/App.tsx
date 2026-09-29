@@ -135,17 +135,11 @@ const App: React.FC = () => {
                 <div className="game-area">
                     <div className="container">
                         <Scoreboard snapshot={snapshot} myId={myId} />
-                        <Countdown
-                            snapshot={snapshot}
-                            myId={myId}
-                            roundEnd={match.lastRoundEnd}
-                            offline={!match.connected}
-                            onChooseRole={chooseRole}
-                        />
-                        {/* Итог показываем над доской: кнопки реванша и выхода
-                            должны быть видны без прокрутки, доска нужна лишь
-                            как запись последнего раунда */}
-                        {snapshot.phase === 'finished' && (
+                        {/* Итог показываем вместо доски: после матча поле
+                            сжималось (45vh -> 30vh), и это дёргало вёрстку
+                            в тот самый момент, когда игрок жмёт кнопки.
+                            Теперь наверху только статистика и действия */}
+                        {snapshot.phase === 'finished' ? (
                             <MatchResult
                                 snapshot={snapshot}
                                 myId={myId}
@@ -153,15 +147,24 @@ const App: React.FC = () => {
                                 onRematch={handleRematch}
                                 onExit={match.leaveMatch}
                             />
+                        ) : (
+                            <>
+                                <Countdown
+                                    snapshot={snapshot}
+                                    myId={myId}
+                                    roundEnd={match.lastRoundEnd}
+                                    offline={!match.connected}
+                                    onChooseRole={chooseRole}
+                                />
+                                <Board
+                                    snapshot={snapshot}
+                                    myId={myId}
+                                    winPattern={match.winPattern}
+                                    onPickNumber={pickNumber}
+                                    onMove={makeMove}
+                                />
+                            </>
                         )}
-
-                        <Board
-                            snapshot={snapshot}
-                            myId={myId}
-                            winPattern={match.winPattern}
-                            onPickNumber={pickNumber}
-                            onMove={makeMove}
-                        />
                     </div>
                 </div>
             )}
