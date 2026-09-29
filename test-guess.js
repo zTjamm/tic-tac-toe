@@ -10,7 +10,9 @@
 
 const { io } = require('socket.io-client');
 
-const URL = 'http://localhost:3000';
+// SERVER_URL позволяет прогнать тот же сценарий против прода:
+//   $env:SERVER_URL='https://mypoddomenjm.mooo.com'; node test-guess.js
+const URL = process.env.SERVER_URL || 'http://localhost:3000';
 const A = 'ga' + Math.floor(Math.random() * 100000);
 const B = 'gb' + Math.floor(Math.random() * 100000);
 const PASSWORD = 'pass1234';
