@@ -404,6 +404,10 @@ class Match {
             attackerId: this.attackerId,
             turnDeadline: this.turnDeadline,
             deadline: this.deadline,
+            // Дедлайны выше считаются по часам сервера. Часы игрока могут
+            // отличаться на любую величину, поэтому отдаём и текущий момент
+            // серверного времени: клиент по нему узнаёт свою поправку.
+            serverNow: nowMs(),
             result: this.result,
             cellNumbers: CELL_NUMBERS,
             players: this.players.map(p => ({

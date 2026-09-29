@@ -72,6 +72,8 @@ export interface MatchSnapshot {
     attackerId: string | null;
     turnDeadline: number | null;
     deadline: number | null;
+    /** момент серверного времени на момент снимка; поправка к часам игрока */
+    serverNow?: number;
     result: MatchResult | null;
     cellNumbers: number[];
     players: MatchPlayer[];

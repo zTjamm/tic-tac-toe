@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { MatchSnapshot, RoundEndInfo } from '../types';
 import './Countdown.css';
 
@@ -24,13 +24,31 @@ const Countdown: React.FC<CountdownProps> = ({
     offline,
     onChooseRole
 }) => {
-    const [now, setNow] = useState(() => Date.now());
-    const [, force] = useState(0);
+    // Счётчик нужен только чтобы панель перерисовывалась: остаток считается
+    // по часам в момент отрисовки, а не по значению из состояния. Когда
+    // значение лежало в состоянии, оно отставало до 200 мс, и отсчёт
+    // показывал «16 с» на пятнадцатисекундном таймере.
+    const [, redraw] = useState(0);
 
     useEffect(() => {
-        const t = setInterval(() => setNow(Date.now()), 200);
+        const t = setInterval(() => redraw(x => x + 1), 200);
         return () => clearInterval(t);
     }, []);
+
+    // Дедлайны приходят с сервера, то есть считаются по его часам. Часы
+    // игрока с ними могут не совпадать - на проверенной машине расхождение
+    // было 56 секунд, и отсчёт показывал «72 с» вместо пятнадцати, причём
+    // на смене хода значение не сбрасывалось, а подрастало. Снимок несёт
+    // текущий момент серверного времени: поправку считаем в момент прихода
+    // снимка, и остаток идёт по ней. Считаем здесь же, в отрисовке, а не в
+    // эффекте - иначе первая цифра после смены фазы показывалась бы
+    // неверной на один кадр.
+    const skew = useMemo(() => {
+        if (snapshot && typeof snapshot.serverNow === 'number') {
+            return snapshot.serverNow - Date.now();
+        }
+        return 0;
+    }, [snapshot]);
 
     // Смена фазы должна перерисовать подсказку
     const phaseKey = snapshot ? `${snapshot.phase}:${snapshot.round}` : 'none';
@@ -38,7 +56,7 @@ const Countdown: React.FC<CountdownProps> = ({
     useEffect(() => {
         if (lastKey.current !== phaseKey) {
             lastKey.current = phaseKey;
-            force(x => x + 1);
+            redraw(x => x + 1);
         }
     }, [phaseKey]);
 
@@ -57,7 +75,8 @@ const Countdown: React.FC<CountdownProps> = ({
     const opponentOffline = players.some(p => p.id !== myId && !p.connected);
 
     const deadline = phase === 'playing' ? turnDeadline : guessing ? guessing.deadline : null;
-    const left = deadline ? Math.max(0, Math.ceil((deadline - now) / 1000)) : null;
+    // Остаток считаем по серверным часам, поэтому поправку вычитаем
+    const left = deadline ? Math.max(0, Math.ceil((deadline - Date.now() - skew) / 1000)) : null;
 
     return (
         <div className={`countdown countdown-${phase}`}>
