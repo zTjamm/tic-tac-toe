@@ -192,19 +192,32 @@ async function main() {
     );
 
     // --- 3. таймер хода: матч доигрываем, оба не ходим ---
+    // Id прошлого вызова снимаем ДО отправки нового. Иначе гонка: событие
+    // на сокет приходит раньше, чем тест разберёт HTTP-ответ, и в сокете
+    // уже лежит новый вызов - сравнивать его с самим собой бесполезно.
+    const staleId = b.challenge ? b.challenge.challengeId : null;
     const rematch = await fetch(`${URL}/api/challenge/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${a.token}` },
         body: JSON.stringify({ targetUsername: B })
     }).then(r => r.json());
     check('повторный вызов принят', rematch.success === true, rematch);
-    await until(() => b.challenge && b.challenge.challengeId !== undefined, 8000);
-    // Первый вызов мог остаться отменённым; принимаем новый
-    await fetch(`${URL}/api/challenge/accept`, {
+    // Ждём именно новый вызов, а не первый попавшийся в сокете
+    await until(
+        () => b.challenge && b.challenge.challengeId !== staleId,
+        10000,
+        'новый вызов пришёл'
+    );
+    check('пришёл именно новый вызов', b.challenge.challengeId === rematch.challengeId, {
+        got: b.challenge.challengeId,
+        sent: rematch.challengeId
+    });
+    const accepted2 = await fetch(`${URL}/api/challenge/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${b.token}` },
         body: JSON.stringify({ challengeId: b.challenge.challengeId })
     }).then(r => r.json());
+    check('повторный матч создан', !!accepted2.roomId, accepted2);
 
     // Оба выбирают число, но роль не выбираем - её назначит сервер по таймеру
     await until(
