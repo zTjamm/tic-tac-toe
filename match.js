@@ -1,347 +1,285 @@
 /**
- * Движок матча «до 5 очков».
+ * Движок партии «Точки и квадраты».
  *
  * Правила (утверждены):
- *  - Атакующий всегда ходит первым и играет X, защитник — O.
- *  - Исход раунда: атакующий выиграл -> атакующий +2;
- *    защитник выиграл -> защитник +3; ничья -> защитник +1.
- *  - Матч идёт до 5 очков, максимум 9 раундов.
- *  - Раунд 1 и раунд 9 начинаются с угадайки: оба выбирают число на доске,
- *    система открывает случайное 1..9, кто угадал или ближе - выбирает,
- *    атаковать ему или защищаться.
- *  - Тайминги: 5 с отсчёт, 10 с на выбор числа, 15 с на ход.
- *  - Нарушение (таймаут хода или обрыв связи) в раунде 1 -> отмена матча.
- *    В раунде 2+ -> побеждает ожидающий, но только если он строго лидирует,
- *    иначе отмена.
- *  - Страйки общие на оба типа нарушений и живут между матчами:
- *    3 нарушения суммарно -> в следующем матче первое нарушение = автопроигрыш
- *    с рейтинговым штрафом как за поражение. Сбрасываются после матча без
- *    единого нарушения.
+ *  - Сетка 5x5 точек, то есть 16 квадратов и 40 линий между точками.
+ *    Партия длится около трёх минут: 40 ходов, на ход 15 секунд.
+ *  - Игроки по очереди проводят линию между соседними точками.
+ *  - Если ход закрывает хотя бы один квадрат, игрок забирает эти квадраты
+ *    и ходит ещё раз (правило продолжения). Иначе ход переходит к сопернику.
+ *  - Матч заканчивается, когда разобраны все 16 квадратов. Больше квадратов -
+ *    победил.
+ *  - Ролей нет: кто ходит первым, определяется случайно.
+ *  - Таймаут хода - НЕ нарушение. В партии сорок ходов четвёртое «нарушение»
+ *    наказало бы новичка за обычное размышление, поэтому сервер рисует за
+ *    него случайную свободную линию. Нарушением считается только обрыв связи.
+ *  - Обрыв связи: 15 секунд на возврат, потом соперник выигрывает матч.
+ *    Четыре обрыва суммарно - автопроигрыш с рейтинговым штрафом.
  *
  * Движок не знает про сокеты: во все методы playerId приходит параметром.
+ *
+ * Геометрия. Точки нумеруются по строкам, квадраты - тоже. Линии двух типов,
+ * и у каждой свой индекс в общем массиве edges:
+ *   горизонтальная h(r,c) = r * SPAN + c          - 20 штук
+ *   вертикальная   v(r,c) = H_COUNT + c * SPAN + r - 20 штук
+ * У квадрата (r,c) стороны: верх h(r,c), низ h(r+1,c),
+ * лево v(r,c), право v(r,c+1).
  */
 
 const crypto = require('crypto');
 
-const TARGET_SCORE = 5;
-const MAX_ROUNDS = 9;
+const GRID = 5;                  // точек по стороне
+const SPAN = GRID - 1;           // 4
+const BOX_COUNT = SPAN * SPAN;   // 16 квадратов
+const H_COUNT = GRID * SPAN;     // 20 горизонтальных линий
+const EDGE_COUNT = H_COUNT * 2;  // 40 линий всего
+const V_BASE = H_COUNT;          // с этого индекса начинаются вертикальные
 
 // Тайминги заданы спецификацией, но их можно переопределить переменными
 // окружения - удобно для локальной отладки и медленных каналов.
-// T_GUESS_COUNTDOWN - отсчёт перед выбором числа (5 с)
-// T_GUESS_PICK       - время на выбор числа (10 с)
-// T_GUESS_ROLE       - время на выбор роли (15 с)
-// T_TURN             - время на ход (15 с)
-// T_RECONNECT        - ожидание переподключения (15 с)
+// T_START      - подготовка к матчу, чтобы игрок успел посмотреть на поле (3 с)
+// T_TURN       - время на ход (15 с)
+// T_RECONNECT  - ожидание переподключения (15 с)
 const envMs = (name, fallback) => {
     const v = Number(process.env[name]);
     return Number.isFinite(v) && v > 0 ? v : fallback;
 };
 
-const GUESS_COUNTDOWN_MS = envMs('T_GUESS_COUNTDOWN', 5000);
-const GUESS_PICK_MS = envMs('T_GUESS_PICK', 10000);
-const GUESS_ROLE_MS = envMs('T_GUESS_ROLE', 15000);
+const START_MS = envMs('T_START', 3000);
 const TURN_MS = envMs('T_TURN', 15000);
 const RECONNECT_GRACE_MS = envMs('T_RECONNECT', 15000);
 
 const STRIKE_LIMIT = 3;
 
-const WIN_PATTERNS = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8],
-    [0, 3, 6], [1, 4, 7], [2, 5, 8],
-    [0, 4, 8], [2, 4, 6]
-];
+/* ------------------------------ геометрия ------------------------------ */
 
-// Числа на доске: 1..9 слева направо, сверху вниз. Фиксированы, чтобы позиции
-// можно было запомнить, а не искать глазами в каждой угадайке.
-const CELL_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const hIndex = (r, c) => r * SPAN + c;
+const vIndex = (r, c) => V_BASE + c * SPAN + r;
+const boxIndex = (r, c) => r * SPAN + c;
+
+/** Четыре стороны квадрата в порядке: верх, низ, лево, право. */
+const BOX_EDGES = [];
+for (let r = 0; r < SPAN; r++) {
+    for (let c = 0; c < SPAN; c++) {
+        BOX_EDGES.push([hIndex(r, c), hIndex(r + 1, c), vIndex(r, c), vIndex(r, c + 1)]);
+    }
+}
+
+/** Какие квадраты касаются каждой линии. Считается один раз при загрузке. */
+const EDGE_BOXES = [];
+for (let i = 0; i < EDGE_COUNT; i++) EDGE_BOXES.push([]);
+
+for (let r = 0; r < GRID; r++) {
+    for (let c = 0; c < SPAN; c++) {
+        const h = hIndex(r, c);
+        if (r > 0) EDGE_BOXES[h].push(boxIndex(r - 1, c));
+        if (r < SPAN) EDGE_BOXES[h].push(boxIndex(r, c));
+    }
+}
+for (let c = 0; c < GRID; c++) {
+    for (let r = 0; r < SPAN; r++) {
+        const v = vIndex(r, c);
+        if (c > 0) EDGE_BOXES[v].push(boxIndex(r, c - 1));
+        if (c < SPAN) EDGE_BOXES[v].push(boxIndex(r, c));
+    }
+}
+
+/** Сколько сторон квадрата уже проведено. */
+function boxDrawnCount(edges, box) {
+    let n = 0;
+    for (const e of BOX_EDGES[box]) if (edges[e] !== -1) n++;
+    return n;
+}
+
+/** Индекс единственной непроведённой стороны квадрата; -1, если их не одна. */
+function missingEdge(edges, box) {
+    let found = -1;
+    for (const e of BOX_EDGES[box]) {
+        if (edges[e] === -1) {
+            if (found !== -1) return -1;
+            found = e;
+        }
+    }
+    return found;
+}
 
 const nowMs = () => Date.now();
-
-function checkWin(board, mark) {
-    for (const pattern of WIN_PATTERNS) {
-        const [a, b, c] = pattern;
-        if (board[a] === mark && board[b] === mark && board[c] === mark) return pattern;
-    }
-    return null;
-}
 
 class Match {
     constructor(roomId, players, hooks = {}) {
         this.roomId = roomId;
         this.hooks = hooks;
 
+        // slot - это номер игрока в массиве players. В edges и boxOwner
+        // хранятся именно слоты, а не ники: снимок уходит обоим участникам
+        // и не должен зависеть от длинных строк
         this.players = players.map((p, i) => ({
+            slot: i,
             id: p.id,
             username: p.username,
             isBot: !!p.isBot,
-            mark: i === 0 ? 'X' : 'O',
             score: 0,
             connected: true,
             violations: 0
         }));
 
-        this.round = 1;
-        this.phase = 'guessing'; // guessing | roleChoice | playing | finished
-        this.guessSub = 'countdown'; // countdown | picking | reveal
-        this.board = Array(9).fill('');
-        this.currentMark = null;
-        this.attackerId = null;
+        this.edges = new Array(EDGE_COUNT).fill(-1);
+        this.boxOwner = new Array(BOX_COUNT).fill(-1);
+        // Кто провёл третью сторону незабранного квадрата. По этому признаку
+        // определяется, кому придётся отдавать цепочку, и подсвечивается
+        // опасность на доске. При заборе квадрата обнуляется
+        this.boxThreat = new Array(BOX_COUNT).fill(-1);
+
+        // Ролей нет, поэтому первый ход - случайный. Иначе всегда выигрывает
+        // тот, кто сидит в левом верхнем углу списка
+        this.firstSlot = crypto.randomInt(this.players.length);
+        this.turnSlot = this.firstSlot;
+        this.phase = 'starting'; // starting | playing | finished
+        this.startDeadline = nowMs() + START_MS;
         this.turnDeadline = null;
-        this.deadline = null;
+        this.movesLeft = EDGE_COUNT;
+        this.result = null;
+        this.lastClaimSlot = null;
+        this.lastGainedBoxes = [];
         this.timer = null;
 
-        this.picks = new Map(); // playerId -> cellIndex
-        this.takenCells = new Set(); // занятые клетки в угадайке
-        this.systemNumber = null;
-        this.guessWinnerId = null;
-        this.result = null;
-
-        this.startGuessing();
+        this.emit('start');
+        this.setTimer(START_MS, () => this.beginPlaying());
     }
 
-    /* ------------------------------ угадайка ------------------------------ */
+    /* -------------------------------- ход -------------------------------- */
 
-    startGuessing() {
+    beginPlaying() {
+        this.phase = 'playing';
+        this.turnDeadline = nowMs() + TURN_MS;
+        this.emit('playBegin');
+        this.setTimer(TURN_MS, () => this.onTurnTimeout(this.turnSlot));
+    }
+
+    move(playerId, edgeIndex, opts = {}) {
+        if (this.phase !== 'playing') return false;
+        const p = this.player(playerId);
+        if (!p || p.slot !== this.turnSlot) return false;
+        if (!Number.isInteger(edgeIndex) || edgeIndex < 0 || edgeIndex >= EDGE_COUNT) return false;
+        if (this.edges[edgeIndex] !== -1) return false;
+
         this.clearTimer();
-        this.phase = 'guessing';
-        this.guessSub = 'countdown';
-        // Доска очищается сразу: в угадайке клетки показывают числа,
-        // старые крестики из прошлого раунда не должны просачиваться в снимок
-        this.board = Array(9).fill('');
-        this.currentMark = null;
-        this.picks = new Map();
-        this.takenCells = new Set();
-        this.systemNumber = null;
-        this.guessWinnerId = null;
-        this.deadline = nowMs() + GUESS_COUNTDOWN_MS;
-        this.emit('guessStart');
-        this.setTimer(GUESS_COUNTDOWN_MS, () => this.openPicking());
-    }
+        this.edges[edgeIndex] = p.slot;
+        this.movesLeft--;
 
-    openPicking() {
-        if (this.phase !== 'guessing') return;
-        this.guessSub = 'picking';
-        this.deadline = nowMs() + GUESS_PICK_MS;
+        const gained = this.updateBoxes(edgeIndex, p.slot);
+        p.score += gained.length;
+        if (gained.length > 0) this.lastClaimSlot = p.slot;
+        // Какие именно квадраты закрыл этот ход: клиент мигает ими, и игрок
+        // видит, куда ушло его очко
+        this.lastGainedBoxes = gained;
 
-        // Бот выбирает мгновенно, чтобы человек не ждал
-        const bot = this.players.find(p => p.isBot);
-        if (bot) this.applyPick(bot.id, this.randomFreeCell());
+        const extraTurn = gained.length > 0;
+        const boxesLeft = this.boxesLeft();
 
-        this.emit('guessOpen');
-
-        if (this.picks.size >= this.players.length) {
-            this.clearTimer();
-            this.revealNumber();
-            return;
+        if (boxesLeft === 0) {
+            this.lastMove = {
+                edge: edgeIndex,
+                playerId,
+                gained: gained.length,
+                extraTurn: true,
+                auto: !!opts.auto
+            };
+            this.emit('move', this.lastMove);
+            this.finishByBoxes();
+            return true;
         }
-        this.setTimer(GUESS_PICK_MS, () => this.onGuessTimeout());
-    }
 
-    randomFreeCell() {
-        const free = [];
-        for (let i = 0; i < 9; i++) if (!this.takenCells.has(i)) free.push(i);
-        if (free.length === 0) return 0;
-        return free[crypto.randomInt(0, free.length)];
-    }
+        if (!extraTurn) this.turnSlot = 1 - p.slot;
+        this.turnDeadline = nowMs() + TURN_MS;
 
-    applyPick(playerId, cellIndex) {
-        if (this.phase !== 'guessing' || this.guessSub !== 'picking') return false;
-        if (!this.players.some(p => p.id === playerId)) return false;
-        if (this.picks.has(playerId)) return false; // перевыбор запрещён
-        if (!Number.isInteger(cellIndex) || cellIndex < 0 || cellIndex > 8) return false;
-        if (this.takenCells.has(cellIndex)) return false; // клетка уже занята соперником
-        this.picks.set(playerId, cellIndex);
-        this.takenCells.add(cellIndex);
+        this.lastMove = {
+            edge: edgeIndex,
+            playerId,
+            gained: gained.length,
+            extraTurn,
+            auto: !!opts.auto
+        };
+        this.emit('move', this.lastMove);
+        this.setTimer(TURN_MS, () => this.onTurnTimeout(this.turnSlot));
         return true;
     }
 
-    pickCell(playerId, cellIndex) {
-        if (!this.applyPick(playerId, cellIndex)) return;
-        this.emit('guessPick');
-        if (this.picks.size >= this.players.length) {
-            this.clearTimer();
-            this.revealNumber();
+    /**
+     * Пересчитывает квадраты, которых коснулась только что проведённая линия.
+     * Возвращает список квадратов, забранных этим ходом, - их ноль, один
+     * или два (одна линия закрывает не больше двух квадратов).
+     */
+    updateBoxes(edgeIndex, slot) {
+        const gained = [];
+        for (const box of EDGE_BOXES[edgeIndex]) {
+            if (this.boxOwner[box] !== -1) continue;
+            const drawn = boxDrawnCount(this.edges, box);
+            if (drawn === 4) {
+                this.boxOwner[box] = slot;
+                this.boxThreat[box] = -1;
+                gained.push(box);
+            } else if (drawn === 3) {
+                this.boxThreat[box] = slot;
+            } else {
+                this.boxThreat[box] = -1;
+            }
         }
+        return gained;
     }
 
-    onGuessTimeout() {
-        if (this.phase !== 'guessing' || this.guessSub !== 'picking') return;
-        // Не выбрал число за 10 секунд -> отмена матча
-        this.finish({ type: 'cancelled', reason: 'guess-timeout' });
+    boxesLeft() {
+        let n = 0;
+        for (const owner of this.boxOwner) if (owner === -1) n++;
+        return n;
     }
 
-    revealNumber() {
-        if (this.phase !== 'guessing') return;
-        this.guessSub = 'reveal';
+    /* ------------------------------ финал ------------------------------ */
 
-        const target = crypto.randomInt(1, 10);
-        this.systemNumber = target;
-
-        const ranked = this.players
-            .map(p => {
-                const cell = this.picks.get(p.id);
-                const guess = cell === undefined ? null : CELL_NUMBERS[cell];
-                return {
-                    id: p.id,
-                    guess,
-                    distance: guess === null ? Infinity : Math.abs(guess - target)
-                };
-            })
-            .sort((a, b) => a.distance - b.distance);
-
-        const [first, second] = ranked;
-
-        if (!first || !second || first.distance === second.distance) {
-            // Оба угадали или равно близко -> открываем новое число
-            this.guessWinnerId = null;
-            this.emit('guessReveal');
-            this.setTimer(2500, () => this.revealNumber());
-            return;
-        }
-
-        this.guessWinnerId = first.id;
-        this.phase = 'roleChoice';
-        this.deadline = nowMs() + GUESS_ROLE_MS;
-        this.emit('guessReveal');
-        this.setTimer(GUESS_ROLE_MS, () => this.chooseRole(this.guessWinnerId, false));
+    /**
+     * 16 квадратов делятся поровну 8:8, поэтому ничья в принципе возможна.
+     * Разыгрывать её нечем, и реванш после 8:8 никому не нужен: побеждает
+     * тот, кто забрал последний квадрат. Разрыв в счёте тогда не спасает -
+     * здесь это осознанное правило, а не ошибка.
+     */
+    finishByBoxes() {
+        const [a, b] = this.players;
+        const tie = a.score === b.score;
+        const winner = tie
+            ? this.players[this.lastClaimSlot !== null ? this.lastClaimSlot : a.slot]
+            : (a.score > b.score ? a : b);
+        this.finish({
+            type: 'finished',
+            winnerId: winner.id,
+            reason: tie ? 'tiebreak' : 'score'
+        });
     }
 
-    // Победитель угадайки выбирает роль. По умолчанию (таймаут) - защита.
-    chooseRole(playerId, wantsToAttack) {
-        if (this.phase !== 'roleChoice') return;
-        if (playerId !== this.guessWinnerId) return;
-        const attackerId = wantsToAttack ? playerId : this.otherId(playerId);
-        this.beginRound(attackerId);
-    }
-
-    otherId(playerId) {
-        return playerId === this.players[0].id ? this.players[1].id : this.players[0].id;
-    }
-
-    /* -------------------------------- раунд -------------------------------- */
-
-    beginRound(attackerId) {
+    finish(result) {
         this.clearTimer();
-        this.attackerId = attackerId;
-        const attacker = this.player(attackerId);
-        const defender = this.player(this.otherId(attackerId));
-
-        // Атакующий играет X, защитник O
-        attacker.mark = 'X';
-        defender.mark = 'O';
-
-        this.board = Array(9).fill('');
-        this.currentMark = 'X';
-        this.phase = 'playing';
-        this.turnDeadline = nowMs() + TURN_MS;
-        this.emit('roundStart');
-        this.setTimer(TURN_MS, () => this.onTurnTimeout(attackerId));
+        this.phase = 'finished';
+        this.result = result;
+        this.emit('finish');
     }
 
-    move(playerId, cellIndex) {
-        if (this.phase !== 'playing') return;
-        const p = this.player(playerId);
-        if (!p || p.mark !== this.currentMark) return;
-        if (!Number.isInteger(cellIndex) || cellIndex < 0 || cellIndex > 8) return;
-        if (this.board[cellIndex] !== '') return;
+    /* ---------------------------- таймаут хода ---------------------------- */
 
-        this.clearTimer();
-        this.board[cellIndex] = p.mark;
-
-        const pattern = checkWin(this.board, p.mark);
-        const full = this.board.every(c => c !== '');
-
-        if (!pattern && !full) {
-            this.currentMark = this.currentMark === 'X' ? 'O' : 'X';
-            this.turnDeadline = nowMs() + TURN_MS;
-            this.emit('move');
-            this.setTimer(TURN_MS, () => this.onTurnTimeout(this.idOfMark(this.currentMark)));
-            return;
-        }
-
-        this.finishRound({ winnerId: pattern ? p.id : null, winPattern: pattern });
-    }
-
-    finishRound({ winnerId, winPattern }) {
-        this.clearTimer();
-        const attacker = this.player(this.attackerId);
-        const defender = this.player(this.otherId(this.attackerId));
-
-        let gainA = 0;
-        let gainD = 0;
-        let outcome;
-        if (winnerId === attacker.id) {
-            gainA = 2; outcome = 'attacker';
-        } else if (winnerId === defender.id) {
-            gainD = 3; outcome = 'defender';
-        } else {
-            gainD = 1; outcome = 'draw';
-        }
-
-        attacker.score += gainA;
-        defender.score += gainD;
-
-        this.emit('roundEnd', { outcome, gainA, gainD, winPattern });
-
-        if (attacker.score >= TARGET_SCORE || defender.score >= TARGET_SCORE) {
-            this.finish({
-                type: 'finished',
-                winnerId: attacker.score >= defender.score ? attacker.id : defender.id,
-                reason: 'score'
-            });
-            return;
-        }
-
-        this.round += 1;
-        if (this.round > MAX_ROUNDS) {
-            this.finish({
-                type: 'finished',
-                winnerId: attacker.score >= defender.score ? attacker.id : defender.id,
-                reason: 'score'
-            });
-            return;
-        }
-
-        // Раунд 9 начинается с угадайки, в остальных роли просто меняются
-        if (this.round === 9) this.startGuessing();
-        else this.beginRound(this.otherId(this.attackerId));
+    /**
+     * Таймаут хода не наказывается страйком: партия короткая, ходов сорок,
+     * и четвёртое «нарушение» наказало бы новичка за размышление. Вместо
+     * этого сервер рисует за него случайную свободную линию, и партия
+     * продолжается. Ограничение - чтобы бесконечный рандом не съел партию.
+     */
+    onTurnTimeout(slot) {
+        if (this.phase !== 'playing' || this.turnSlot !== slot) return;
+        const free = [];
+        for (let i = 0; i < EDGE_COUNT; i++) if (this.edges[i] === -1) free.push(i);
+        if (free.length === 0) return;
+        const p = this.players[slot];
+        this.move(p.id, free[crypto.randomInt(0, free.length)], { auto: true });
     }
 
     /* ------------------------------ нарушения ------------------------------ */
-
-    onTurnTimeout(playerId) {
-        if (this.phase !== 'playing') return;
-        this.resolveViolation(playerId, 'timeout');
-    }
-
-    resolveViolation(playerId, kind) {
-        const p = this.player(playerId);
-        if (!p) return;
-
-        // Бот управляется сервером и ходит вовремя: страйки ему не положены
-        if (!p.isBot) {
-            p.violations++;
-            if (this.hooks.onViolation) {
-                this.hooks.onViolation(p.username, p.violations, kind);
-            }
-        }
-
-        // Страйки исчерпаны -> автопроигрыш с рейтинговым штрафом
-        if (this.hooks.shouldPunish && this.hooks.shouldPunish(p.username)) {
-            this.finish({ type: 'finished', winnerId: this.otherId(playerId), reason: 'strike' });
-            return;
-        }
-
-        const opponent = this.player(this.otherId(playerId));
-        const strictLead = opponent.score > p.score;
-
-        if (this.round === 1 || !strictLead) {
-            this.finish({ type: 'cancelled', reason: kind });
-            return;
-        }
-        this.finish({ type: 'finished', winnerId: opponent.id, reason: kind });
-    }
 
     onDisconnect(playerId) {
         if (this.phase === 'finished') return;
@@ -351,7 +289,7 @@ class Match {
         p.connected = false;
         this.emit('disconnect');
         this.setTimer(RECONNECT_GRACE_MS, () => {
-            if (!p.connected) this.resolveViolation(playerId, 'disconnect');
+            if (!p.connected) this.resolveViolation(playerId);
         });
     }
 
@@ -362,23 +300,31 @@ class Match {
         this.clearTimer();
 
         if (this.phase === 'playing') {
-            // После переподключения даём остаток времени на ход
-            const rest = this.turnDeadline && this.turnDeadline > nowMs()
-                ? this.turnDeadline - nowMs()
-                : TURN_MS;
-            this.turnDeadline = nowMs() + rest;
-            this.setTimer(rest, () => this.onTurnTimeout(this.idOfMark(this.currentMark)));
+            // Возвратившемуся даём полный ход: остаток считать не от чего,
+            // дедлайн мог истечь, пока связи не было
+            this.turnDeadline = nowMs() + TURN_MS;
+            this.setTimer(TURN_MS, () => this.onTurnTimeout(this.turnSlot));
         }
         this.emit('reconnect');
     }
 
-    /* -------------------------------- финал -------------------------------- */
+    /**
+     * Единственное наказуемое нарушение - обрыв связи, из которого игрок не
+     * вернулся. Соперник выигрывает: он ничего не сделал неправильно, и
+     * оставлять его на застывшей доске незачем.
+     */
+    resolveViolation(playerId) {
+        const p = this.player(playerId);
+        if (!p) return;
+        if (this.hooks.onViolation) this.hooks.onViolation(p.username, 'disconnect');
 
-    finish(result) {
-        this.clearTimer();
-        this.phase = 'finished';
-        this.result = result;
-        this.emit('finish');
+        const other = this.players[1 - p.slot];
+        const punished = this.hooks.shouldPunish && this.hooks.shouldPunish(p.username);
+        this.finish({
+            type: 'finished',
+            winnerId: other ? other.id : null,
+            reason: punished ? 'strike' : 'disconnect'
+        });
     }
 
     /* ------------------------------ состояние ------------------------------ */
@@ -387,52 +333,69 @@ class Match {
         return this.players.find(p => p.id === id) || null;
     }
 
-    idOfMark(mark) {
-        const p = this.players.find(x => x.mark === mark);
-        return p ? p.id : null;
+    playerBySlot(slot) {
+        return this.players.find(p => p.slot === slot) || null;
+    }
+
+    otherId(playerId) {
+        const p = this.player(playerId);
+        return p ? this.players[1 - p.slot].id : null;
+    }
+
+    /**
+     * Квадраты с тремя сторонами, принадлежащие игроку, которому сейчас ход.
+     * Он обязан будет их отдать: остальные три линии уже проведены, и чтобы
+     * квадрат не достался сопернику, ходить туда нельзя. Именно эти квадраты
+     * подсвечиваются на доске - без подсветки цепочка не читается, и первые
+     * партии играются вслепую.
+     */
+    dangerBoxes() {
+        if (this.phase !== 'playing') return [];
+        const out = [];
+        for (let b = 0; b < BOX_COUNT; b++) {
+            if (this.boxOwner[b] === -1 && this.boxThreat[b] === this.turnSlot) out.push(b);
+        }
+        return out;
     }
 
     snapshot() {
+        const toMove = this.playerBySlot(this.turnSlot);
+        const first = this.playerBySlot(this.firstSlot);
         return {
             roomId: this.roomId,
             phase: this.phase,
-            round: this.round,
-            maxRounds: MAX_ROUNDS,
-            targetScore: TARGET_SCORE,
-            board: this.board,
-            currentMark: this.currentMark,
-            attackerId: this.attackerId,
-            turnDeadline: this.turnDeadline,
-            deadline: this.deadline,
-            // Дедлайны выше считаются по часам сервера. Часы игрока могут
-            // отличаться на любую величину, поэтому отдаём и текущий момент
-            // серверного времени: клиент по нему узнаёт свою поправку.
+            grid: GRID,
+            // -1 - линия не проведена, иначе номер слота игрока
+            edges: this.edges.slice(),
+            // -1 - квадрат не забран, иначе номер слота игрока
+            boxOwner: this.boxOwner.slice(),
+            turnId: toMove ? toMove.id : null,
+            firstId: first ? first.id : null,
+            startDeadline: this.phase === 'starting' ? this.startDeadline : null,
+            turnDeadline: this.phase === 'playing' ? this.turnDeadline : null,
+            // Дедлайны считаются по часам сервера. Часы игрока могут отличаться
+            // на любую величину, поэтому отдаём и текущий момент серверного
+            // времени: клиент по нему узнаёт свою поправку.
             serverNow: nowMs(),
             result: this.result,
-            cellNumbers: CELL_NUMBERS,
+            totalBoxes: BOX_COUNT,
+            totalEdges: EDGE_COUNT,
+            boxesLeft: this.boxesLeft(),
+            movesLeft: this.movesLeft,
+            danger: this.dangerBoxes(),
+            lastGainedBoxes: this.lastGainedBoxes,
             players: this.players.map(p => ({
                 id: p.id,
+                slot: p.slot,
                 username: p.username,
-                mark: p.mark,
                 score: p.score,
                 isBot: p.isBot,
                 connected: p.connected,
-                pick: this.picks.has(p.id) ? this.picks.get(p.id) : null,
-                isAttacker: p.id === this.attackerId,
-                isGuessWinner: p.id === this.guessWinnerId
+                rating: 0,   // проставляется менеджером
+                strikes: 0   // проставляется менеджером
             })),
-            guessing: this.phase === 'guessing' || this.phase === 'roleChoice'
-                ? {
-                    sub: this.guessSub,
-                    systemNumber: this.systemNumber,
-                    winnerId: this.guessWinnerId,
-                    deadline: this.deadline
-                }
-                : null,
             timing: {
-                guessCountdown: GUESS_COUNTDOWN_MS,
-                guessPick: GUESS_PICK_MS,
-                guessRole: GUESS_ROLE_MS,
+                start: START_MS,
                 turn: TURN_MS
             }
         };
@@ -457,14 +420,20 @@ class Match {
 
 module.exports = {
     Match,
-    TARGET_SCORE,
-    MAX_ROUNDS,
+    GRID,
+    SPAN,
+    BOX_COUNT,
+    EDGE_COUNT,
+    H_COUNT,
+    BOX_EDGES,
+    EDGE_BOXES,
+    hIndex,
+    vIndex,
+    boxIndex,
+    boxDrawnCount,
+    missingEdge,
     STRIKE_LIMIT,
-    WIN_PATTERNS,
-    CELL_NUMBERS,
+    START_MS,
     TURN_MS,
-    GUESS_COUNTDOWN_MS,
-    GUESS_PICK_MS,
-    GUESS_ROLE_MS,
     RECONNECT_GRACE_MS
 };

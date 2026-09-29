@@ -9,11 +9,16 @@
     margin-bottom: 10px;
 }
 
+.scoreboard-round b {
+    color: var(--text-color);
+}
+
 .scoreboard-players {
     display: flex;
     gap: 10px;
 }
 
+/* Цвет игрока задан в --slot-a / --slot-b, здесь только фон рамки */
 .score {
     flex: 1;
     text-align: center;
@@ -25,12 +30,12 @@
     position: relative;
 }
 
-.score-x {
-    background: var(--x-bg);
+.score.slot-0 {
+    background: var(--slot-a-bg);
 }
 
-.score-o {
-    background: var(--o-bg);
+.score.slot-1 {
+    background: var(--slot-b-bg);
 }
 
 /* Свой счёт выделяем рамкой */
@@ -40,17 +45,18 @@
 
 .score .mark {
     display: block;
-    font-size: 1.2em;
-    font-weight: bold;
-    line-height: 1.1;
+    width: 18px;
+    height: 18px;
+    margin: 0 auto 4px;
+    border-radius: 4px;
 }
 
-.score-x .mark {
-    color: var(--x-color);
+.score.slot-0 .mark {
+    background: var(--slot-a);
 }
 
-.score-o .mark {
-    color: var(--o-color);
+.score.slot-1 .mark {
+    background: var(--slot-b);
 }
 
 .score .label {
@@ -63,6 +69,20 @@
     white-space: nowrap;
 }
 
+/* Кто ходил первым: ход первого сильнее, и это стоит показать явно,
+   иначе проигрыш выглядит как ошибка, а не как следствие правила */
+.first-move {
+    display: inline-block;
+    margin-left: 5px;
+    padding: 0 5px;
+    font-size: 0.85em;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--score-bg);
+    border-radius: 6px;
+    vertical-align: middle;
+}
+
 .score .value {
     font-size: 1.7em;
     font-weight: bold;
@@ -70,12 +90,30 @@
     line-height: 1;
 }
 
-.score-x .value {
-    color: var(--x-color);
+.score.slot-0 .value {
+    color: var(--slot-a);
 }
 
-.score-o .value {
-    color: var(--o-color);
+.score.slot-1 .value {
+    color: var(--slot-b);
+}
+
+/* Счёт только что увеличился: подпрыгивает, чтобы за забором квадрата
+   было видно сразу, а не приходилось сравнивать цифры */
+.score .value.is-bumped {
+    animation: value-bump 0.5s cubic-bezier(0.22, 1.5, 0.36, 1);
+}
+
+@keyframes value-bump {
+    0% {
+        transform: scale(1);
+    }
+    40% {
+        transform: scale(1.45);
+    }
+    100% {
+        transform: scale(1);
+    }
 }
 
 .score .offline {
@@ -85,7 +123,7 @@
     margin-top: 4px;
 }
 
-/* Счётчик нарушений в табло */
+/* Счётчик обрывов связи в табло */
 .score .strikes {
     display: inline-block;
     margin-left: 6px;
@@ -98,17 +136,10 @@
     vertical-align: middle;
 }
 
-/* Два нарушения из трёх - предупреждение перед автопроигрышем */
+/* Два обрыва из трёх - предупреждение перед автопроигрышем */
 .score .strikes.is-danger {
     color: #fff;
-    background: var(--o-color);
-}
-
-.scoreboard-hint {
-    text-align: center;
-    font-size: 0.8em;
-    color: var(--text-muted);
-    margin-top: 8px;
+    background: var(--slot-b);
 }
 
 @media (max-width: 480px) {

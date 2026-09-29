@@ -1,189 +1,237 @@
+/**
+ * Доска «точек и квадратов».
+ *
+ * Рисуем SVG, а не div'ы: линии нужно соединять под углом, квадраты
+ * заливать по владельцу, а поверх подсвечивать цепочки. На div'ах это
+ * превращается в десятки абсолютно позиционированных элементов.
+ *
+ * Цвета игроков заданы переменными --slot-a и --slot-b в index.css, чтобы
+ * тут не дублировать палитру.
+ */
+
 .board {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
-    margin: 0 auto 20px;
-    aspect-ratio: 1;
-    /* Доска не должна выталкивать кнопки за пределы экрана:
-       45vh оставляет место под верхнюю панель, табло и отсчёт.
-       Размер не зависит от содержимого клеток, поэтому ход не дёргает
-       вёрстку - меняется только наполнение. */
-    width: min(100%, 45vh);
-}
-
-.cell {
-    background: var(--cell-bg);
-    border: 3px solid var(--cell-border);
-    border-radius: 15px;
     display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 3em;
-    font-weight: bold;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    user-select: none;
-    min-height: 80px;
-}
-
-.cell:hover:not(.taken) {
-    background: var(--cell-hover);
-    border-color: var(--text-muted);
-    transform: scale(1.02);
-}
-
-.cell.x {
-    color: var(--x-color);
-    border-color: var(--x-color);
-    background: var(--x-bg);
-}
-
-.cell.o {
-    color: var(--o-color);
-    border-color: var(--o-color);
-    background: var(--o-bg);
-}
-
-.cell.win {
-    background: var(--win-bg);
-    border-color: var(--win-color);
-    color: var(--win-color);
-    animation: celebrate 0.5s ease;
-}
-
-.cell.taken {
-    cursor: not-allowed;
-}
-
-/* ===================== режим угадайки: числа на доске ===================== */
-
-.board-guessing .cell {
-    cursor: pointer;
     flex-direction: column;
-    gap: 2px;
-    font-size: 1.6em;
-    font-weight: 700;
-    color: var(--text-muted);
-    background: var(--cell-bg);
-    /* Пунктир в 2px на светлом фоне почти не читался - толще и контрастнее */
-    border-style: dashed;
-    border-width: 3px;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    /* Доска забирает всю оставшуюся высоту колонки. Раньше её размер
+       задавался шириной, и на невысоком экране поле вместе с легендой
+       уезжало под нижний край страницы - приходилось прокручивать */
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
-.board-guessing .cell.taken {
-    cursor: default;
-}
+/* Элемент SVG занимает всю свободную область, а квадратную картинку внутри
+   центрирует и вписывает сам preserveAspectRatio (xMidYMid meet).
+   Так доска ужимается по меньшей стороне и никогда не вылезает за экран.
 
-.cell-num {
-    line-height: 1;
-    font-size: 1.5em;
-}
+   Раньше здесь стояло max-width с aspect-ratio: тогда высота считалась от
+   ширины, и на невысоком экране поле вместе с легендой уезжало под нижний
+   край страницы. */
+/* Высота ведёт, ширина следует за ней через aspect-ratio: поле всегда
+   квадратное и не оставляет пустых полей по бокам, когда упирается в
+   высоту экрана. max-width страхует случай, когда места по высоте больше,
+   чем по ширине.
 
-/* Выбор соперника - другим цветом, свой - своим */
-.cell-number.pick-mine {
-    border-style: solid;
-    border-color: var(--accent);
-    background: var(--x-bg);
-    color: var(--x-color);
-}
-
-.cell-number.pick-theirs {
-    border-style: solid;
-    border-color: var(--o-color);
-    background: var(--o-bg);
-    color: var(--o-color);
-}
-
-.cell-pick-owner {
-    font-size: 0.32em;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    opacity: 0.85;
+   Порядок важен: width: 100% и height: 100% вместе с aspect-ratio
+   означали бы, что размеры заданы явно и пропорция игнорируется. */
+.board-svg {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    width: auto;
+    aspect-ratio: 1 / 1;
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    user-select: none;
+    touch-action: manipulation;
+    /* Поле проявляется при появлении: партия начинается, и доска не должна
+       возникать мгновенно посреди экрана */
+    animation: board-in 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Подпись под загаданным числом */
-.cell-system {
-    font-size: 0.26em;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    opacity: 0.9;
-    white-space: nowrap;
+@keyframes board-in {
+    from {
+        opacity: 0;
+        transform: scale(0.96);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
-/* Победитель угадайки получает рамку, ему выбирать роль */
-.cell-pick-owner.is-winner {
-    opacity: 1;
-    font-weight: 700;
+/* Точки сетки проявляются каскадом: сетка читается как сетка, а не как
+   набор случайных кружков */
+.dot {
+    animation: dot-in 0.35s ease-out backwards;
 }
 
-.cell-number.pick-mine .cell-pick-owner.is-winner,
-.cell-number.pick-theirs .cell-pick-owner.is-winner {
-    text-decoration: underline;
+@keyframes dot-in {
+    from {
+        opacity: 0;
+        transform: scale(0.4);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
-/* Системное число: золотое свечение. Раньше класс .revealed был написан,
-   но никогда не присваивался - игроки видели число только в тексте
-   таймера и не понимали, к какой клетке оно относится */
-.cell-number.revealed {
-    border-style: solid;
-    border-color: var(--guess-color);
-    background: var(--guess-bg);
-    color: var(--guess-color);
-    font-weight: 800;
-    box-shadow: 0 0 0 2px var(--guess-color), 0 0 18px 4px var(--guess-glow);
-    animation: guess-glow 1.6s ease-in-out infinite;
+.board-empty .board-svg {
+    opacity: 0.35;
 }
 
-@keyframes guess-glow {
-    0%, 100% {
-        box-shadow: 0 0 0 2px var(--guess-color), 0 0 12px 2px var(--guess-glow);
+/* ------------------------- точки сетки ------------------------- */
+
+.dot {
+    fill: var(--dot-color);
+    transition: fill 0.2s;
+}
+
+/* ------------------------- линии ------------------------- */
+
+.edge-line {
+    stroke-width: 5;
+    stroke-linecap: round;
+    animation: edge-in 0.18s ease-out;
+}
+
+/* Линия только что проведена: короткая вспышка, чтобы глаз нашёл её
+   на поле, где таких линий сорок */
+.edge-line.slot-0 {
+    stroke: var(--slot-a);
+    animation: edge-in 0.18s ease-out, flash-a 0.45s ease-out;
+}
+
+.edge-line.slot-1 {
+    stroke: var(--slot-b);
+    animation: edge-in 0.18s ease-out, flash-b 0.45s ease-out;
+}
+
+/* Последняя линия держится чуть толще и ярче: в партии сорок ходов, и
+   без подсветки непонятно, куда смотреть, когда очередь перешла к тебе */
+.edge-line.is-latest {
+    animation: edge-in 0.18s ease-out, flash-a 0.45s ease-out,
+        latest-hold 2.2s ease-out 0.2s forwards;
+}
+
+@keyframes latest-hold {
+    to {
+        stroke-width: 6.5;
+        filter: drop-shadow(0 0 4px currentColor);
+    }
+}
+
+@keyframes edge-in {
+    from {
+        stroke-dasharray: 0 200;
+    }
+    to {
+        stroke-dasharray: 200 0;
+    }
+}
+
+@keyframes flash-a {
+    0% {
+        stroke-width: 11;
+    }
+    100% {
+        stroke-width: 5;
+    }
+}
+
+@keyframes flash-b {
+    0% {
+        stroke-width: 11;
+    }
+    100% {
+        stroke-width: 5;
+    }
+}
+
+/* Прозрачная полоса поверх свободной линии. Сама линия толщиной 5,
+   а полоса 26 - иначе по тонкой линии попасть пальцем почти невозможно,
+   и игрок будет думать, что ход не засчитывается */
+.edge-hit {
+    fill: transparent;
+    cursor: pointer;
+    transition: fill 0.12s;
+}
+
+.edge-hit:hover {
+    fill: var(--hit-hover);
+}
+
+@media (pointer: coarse) {
+    /* На тач-экране наведения нет, поэтому подсветка при нажатии
+       держится дольше - иначе игрок не увидит, куда попал */
+    .edge-hit:active {
+        fill: var(--hit-hover);
+    }
+}
+
+/* ------------------------- квадраты ------------------------- */
+
+.box-fill {
+    transition: opacity 0.25s;
+}
+
+.box-fill.slot-0 {
+    fill: var(--slot-a);
+    opacity: 0.18;
+}
+
+.box-fill.slot-1 {
+    fill: var(--slot-b);
+    opacity: 0.18;
+}
+
+/* Только что забранный квадрат. Помимо вспышки он ещё и «вырастает»:
+   без этого смена заливки выглядит как мгновенная перекраска, и не видно,
+   что очко только что прибавилось */
+.box-fill.just-taken {
+    animation: box-pop 0.55s cubic-bezier(0.22, 1.4, 0.36, 1);
+    transform-box: fill-box;
+    transform-origin: center;
+}
+
+@keyframes box-pop {
+    0% {
+        opacity: 0.85;
+        transform: scale(0.55);
+    }
+    60% {
+        transform: scale(1.04);
+    }
+    100% {
+        opacity: 0.18;
+        transform: scale(1);
+    }
+}
+
+/* Цепочка, которую игрок обязан отдать. Без этой подсветки новичок
+   не понимает, почему проигрывает: правило продолжения не читается
+   с пустого поля */
+.box-danger {
+    fill: var(--danger);
+    stroke: var(--danger-stroke);
+    stroke-width: 2;
+    stroke-dasharray: 5 4;
+    pointer-events: none;
+    animation: danger-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes danger-blink {
+    0%,
+    100% {
+        opacity: 0.55;
     }
     50% {
-        box-shadow: 0 0 0 2px var(--guess-color), 0 0 26px 8px var(--guess-glow);
+        opacity: 1;
     }
 }
 
-/* Клетка в угадайке, по которой сейчас нельзя хлопнуть: идёт отсчёт
-   или клетку занял соперник. Раньше клик по такой клетке молча
-   ничего не делал, и выглядело это как «выбирать надо по очереди» */
-.board-guessing .cell.locked {
-    cursor: default;
-    opacity: 0.55;
-}
-
-.board-guessing .cell.locked:hover {
-    transform: none;
-}
-
-/* Отсчёт уже идёт - клетки гаснут, чтобы было видно, что ждать */
-.board-guessing.waiting .cell {
-    opacity: 0.4;
-    border-style: dashed;
-}
-
-.board-empty .cell {
-    background: transparent;
-    border-color: transparent;
-}
-
-@keyframes celebrate {
-    0%, 100% { transform: scale(1); }
-    25% { transform: scale(1.1) rotate(-5deg); }
-    75% { transform: scale(1.1) rotate(5deg); }
-}
-
-@media (max-width: 480px) {
-    .cell {
-        font-size: 2em;
-        border-radius: 10px;
-        min-height: 60px;
-    }
-    .board {
-        gap: 6px;
-    }
-}
+/* Легенда под полем убрана: в табло игроки и их счёт уже есть, а снизу
+   был дубль, который в тёмной теме ещё и читался чёрным - в CSS стояла
+   переменная --text-dim, которой никто не объявлял */

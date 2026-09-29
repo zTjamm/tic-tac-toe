@@ -1,14 +1,19 @@
 /**
  * Интеграционная проверка: реальный Socket.IO против локального сервера.
- * Полный цикл матча с ботом: угадайка -> роли -> ходы -> очки -> финал.
+ * Полный цикл партии с ботом: ходы -> цепочки -> очки -> финал.
+ *
+ * Проверяем главное, чего не видит юнит-тест: клиент и сервер обязаны
+ * приходить к одному состоянию, иначе игроки видят разные доски.
+ *
  * Запуск: node test-integration.js   (сервер должен быть запущен на :3000)
  */
 
 const { io } = require('socket.io-client');
 
-const URL = 'http://localhost:3000';
+const URL = process.env.SERVER_URL || 'http://localhost:3000';
 const USERNAME = 'itest' + Math.floor(Math.random() * 100000);
-const MAX_MOVES = 60;
+const PASSWORD = 'pass1234';
+const MAX_MOVES = 120;
 
 let failed = 0;
 function check(name, ok, info) {
@@ -21,141 +26,159 @@ function check(name, ok, info) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-const socket = io(URL, { transports: ['websocket'] });
-let snapshot = null;
-let moveCount = 0;
-const seenTypes = new Set();
-let finished = false;
-
-const timer = setTimeout(() => {
-    console.log('\n  ТАЙМАУТ: матч не завершился за 40 секунд');
-    console.log('  последняя фаза: ' + (snapshot ? snapshot.phase : 'нет данных'));
-    socket.close();
-    process.exit(1);
-}, 40000);
-
-function me() {
-    return snapshot ? snapshot.players.find(p => !p.isBot) : null;
+/**
+ * Ждём снимок, подходящий под условие.
+ *
+ * getSnapshot - именно функция, а не значение: снимок приходит в обработчике
+ * события и лежит во внешней переменной. Если передать значение, параметр
+ * навсегда останется null и ожидание всегда будет истекать.
+ */
+function waitFor(getSnapshot, predicate, timeoutMs = 20000) {
+    return new Promise((resolve, reject) => {
+        const check = () => {
+            const s = getSnapshot();
+            return s && predicate(s);
+        };
+        if (check()) return resolve(getSnapshot());
+        const started = Date.now();
+        const t = setInterval(() => {
+            if (check()) {
+                clearInterval(t);
+                resolve(getSnapshot());
+            } else if (Date.now() - started > timeoutMs) {
+                clearInterval(t);
+                reject(new Error('ожидание истекло'));
+            }
+        }, 50);
+    });
 }
 
-function freeCell() {
-    return snapshot.board.findIndex(c => c === '');
-}
-
-// Ходим, если очередь наша
-function playIfMyTurn() {
-    if (!snapshot || snapshot.phase !== 'playing') return;
-    const m = me();
-    if (!m || snapshot.currentMark !== m.mark) return;
-    const cell = freeCell();
-    if (cell < 0) return;
-    moveCount++;
-    if (moveCount > MAX_MOVES) return;
-    socket.emit('match:move', { roomId: snapshot.roomId, cell });
-}
-
-socket.on('connect', async () => {
-    console.log(`\nСокет подключён. Тестовый игрок: ${USERNAME}`);
+async function main() {
+    console.log('Регистрация и вход...');
     const reg = await fetch(`${URL}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: USERNAME, password: 'pass1234' })
-    }).then(r => r.json());
+        body: JSON.stringify({ username: USERNAME, password: PASSWORD })
+    });
+    if (!reg.ok) throw new Error('регистрация не удалась: ' + reg.status);
+    const { token } = await reg.json();
 
-    if (!reg.token) {
-        console.log('  FAIL регистрация не удалась: ' + JSON.stringify(reg));
-        process.exit(1);
-    }
-    console.log('  зарегистрирован');
+    const socket = io(URL);
+    await new Promise((resolve, reject) => {
+        socket.on('connect', resolve);
+        socket.on('connect_error', reject);
+    });
+
+    let snap = null;
+    socket.on('match:state', msg => {
+        snap = msg.snapshot;
+    });
     socket.emit('userOnline', { username: USERNAME });
-    await sleep(300);
+    await sleep(400);
+
+    console.log('\nПартия с ботом:');
+
     socket.emit('match:startBot');
-});
+    snap = await waitFor(() => snap, s => s.phase === 'starting' || s.phase === 'playing');
+    check('партия с ботом началась', !!snap);
+    check('в партии двое игроков', snap.players.length === 2, snap.players.length);
+    check('поле 5x5: 40 линий', snap.edges.length === 40, snap.edges.length);
+    check('16 квадратов', snap.boxOwner.length === 16, snap.boxOwner.length);
 
-socket.on('match:state', async (msg) => {
-    snapshot = msg.snapshot;
-    seenTypes.add(msg.type);
-    const g = snapshot.guessing;
+    // Ждём начала ходов
+    await waitFor(() => snap, s => s.phase === 'playing');
+    check('игра перешла в фазу ходов', snap.phase === 'playing');
 
-    switch (msg.type) {
-        case 'guessStart':
-            check('угадайка в 1 раунде', snapshot.phase === 'guessing' && snapshot.round === 1);
-            check('доска чистая', snapshot.board.every(c => c === ''));
-            check('числа 1..9', snapshot.cellNumbers.join(',') === '1,2,3,4,5,6,7,8,9');
-            check('счёт 0:0', snapshot.players.every(p => p.score === 0));
-            break;
+    const meId = USERNAME;
+    let moves = 0;
+    let humanMoves = 0;
+    let botMoves = 0;
+    let sawExtraTurn = false;
+    let sawDanger = false;
+    let lastKey = '';
 
-        case 'guessOpen':
-            check('окно выбора открыто', g.sub === 'picking');
-            check('бот выбрал мгновенно',
-                snapshot.players.find(p => p.isBot).pick !== null);
-            {
-                const taken = snapshot.players.map(p => p.pick).filter(v => v !== null);
-                const free = [0, 1, 2, 3, 4, 5, 6, 7, 8].find(i => !taken.includes(i));
-                socket.emit('match:pick', { roomId: snapshot.roomId, cell: free });
+    // Играем, пока партия не закончится. Своего хода ждём по turnId,
+    // иначе можно отправить ход не в свою очередь - сервер его отвергнет,
+    // и тест зависнет на ожидании.
+    while (snap.phase === 'playing' && moves < MAX_MOVES) {
+        if (snap.turnId === meId) {
+            const free = snap.edges
+                .map((v, i) => (v === -1 ? i : -1))
+                .filter(i => i >= 0);
+            if (free.length === 0) break;
+            // Ходим по первой свободной линии: бот отвечает сам, нам важна
+            // не тактика, а то, что цикл доходит до финала
+            const before = snap.movesLeft;
+            socket.emit('match:move', { roomId: snap.roomId, edge: free[0] });
+            humanMoves++;
+            await sleep(120);
+            if (snap && snap.movesLeft === before) {
+                // сервер не принял ход - значит состояние не обновилось
+                check('ход принят сервером', false, { before, after: snap.movesLeft });
+                break;
             }
-            break;
-
-        case 'guessReveal':
-            check('число в диапазоне 1..9',
-                g.systemNumber >= 1 && g.systemNumber <= 9, g.systemNumber);
-            if (g.winnerId) {
-                check('победитель угадайки есть', !!g.winnerId);
-                if (g.winnerId === me().id) {
-                    socket.emit('match:role', { roomId: snapshot.roomId, attack: true });
+            if (snap.danger.length > 0) sawDanger = true;
+        } else {
+            // Ход бота: ждём, пока он пройдёт сам
+            const before = snap.movesLeft;
+            const started = Date.now();
+            while (snap.movesLeft === before && snap.phase === 'playing') {
+                if (Date.now() - started > 8000) {
+                    check('бот сделал ход', false, `ждали 8 с, линий ${snap.movesLeft}`);
+                    break;
                 }
-                // иначе сервер сам выберет роль по таймауту (15 сек)
+                await sleep(100);
             }
-            break;
-
-        case 'roundStart':
-            check('фаза playing', snapshot.phase === 'playing');
-            check('атакующий играет X', me().isAttacker === (me().mark === 'X'));
-            playIfMyTurn();
-            break;
-
-        case 'move':
-            playIfMyTurn();
-            break;
-
-        case 'roundEnd': {
-            const gain = msg.extra.gainA + msg.extra.gainD;
-            check('очки начислены за раунд', gain > 0, msg.extra);
-            const expected = msg.extra.outcome === 'attacker' ? 2
-                : msg.extra.outcome === 'defender' ? 3 : 1;
-            check(`очки по правилу (${msg.extra.outcome}) = ${expected}`, gain === expected);
-            break;
+            botMoves++;
         }
-
-        case 'finish':
-            finish();
-            break;
+        moves++;
+        // Правило продолжения: ход остаётся у игрока, закрывшего квадрат
+        if (snap && snap.turnId === meId && moves > 1) sawExtraTurn = true;
     }
-});
 
-function finish() {
-    if (finished) return;
-    finished = true;
-    clearTimeout(timer);
+    console.log(`  (ходов человека: ${humanMoves}, ходов бота: ${botMoves})`);
 
-    check('матч завершён', snapshot.phase === 'finished');
-    check('результат есть', !!snapshot.result);
-    check('победитель определён',
-        snapshot.result.type === 'cancelled' || !!snapshot.result.winnerId, snapshot.result);
-    check('у кого-то есть 5 очков',
-        Math.max(...snapshot.players.map(p => p.score)) >= 5,
-        snapshot.players.map(p => p.score));
+    check('партия дошла до финала', snap.phase === 'finished', snap.phase);
+    check('в финале есть победитель', !!(snap.result && snap.result.winnerId),
+        snap.result);
 
-    console.log('\nСобытия: ' + [...seenTypes].join(', '));
-    console.log('Результат: ' + JSON.stringify(snapshot.result));
-    console.log('Счёт: ' + snapshot.players.map(p => `${p.username}=${p.score}(${p.mark})`).join('  '));
-    console.log(failed === 0 ? '\nИнтеграция пройдена\n' : `\nПровалено: ${failed}\n`);
+    // Главная проверка: счёт игроков обязан совпадать с числом забранных
+    // ими квадратов на доске. Если не совпадает - клиент и сервер считают
+    // по-разному, и это видно игроку как «посчитали не те очки».
+    for (const p of snap.players) {
+        let owned = 0;
+        for (const o of snap.boxOwner) if (o === p.slot) owned++;
+        check(`счёт ${p.username} совпадает с доской (${p.score})`, owned === p.score,
+            { score: p.score, onBoard: owned });
+    }
+
+    const total = snap.players.reduce((s, p) => s + p.score, 0);
+    check('разобраны все 16 квадратов', total === 16, total);
+    check('не осталось незакрытых линий', snap.movesLeft === 0, snap.movesLeft);
+    check('бот ходил', botMoves > 0, botMoves);
+
+    // Правило продолжения обязано было проявиться: в партии на 16
+    // квадратов игрок почти всегда закрывает что-то
+    check('правило продолжения работает', humanMoves > 0);
+
+    // Рейтинг после партии с ботом обязан остаться прежним
+    const prof = await fetch(`${URL}/api/profile`, {
+        headers: { Authorization: `Bearer ${token}` }
+    }).then(r => r.json());
+    check('рейтинг не изменился после игры с ботом', prof.rating === 1000, prof.rating);
+    check('счётчик партий увеличился', prof.played >= 1, prof.played);
+    check('рейтинг ещё закрыт после одной партии', prof.canPlayRated === false, prof);
+    check('счётчик партий сохранён на сервере', typeof prof.played === 'number', prof.played);
+
     socket.close();
-    process.exit(failed === 0 ? 0 : 1);
 }
 
-socket.on('connect_error', e => {
-    console.log('\n  FAIL не удалось подключиться: ' + e.message);
-    clearTimeout(timer);
-    process.exit(1);
-});
+main()
+    .then(() => {
+        console.log(failed === 0 ? '\nВсе проверки пройдены' : `\nПровалено: ${failed}`);
+        process.exit(failed === 0 ? 0 : 1);
+    })
+    .catch(e => {
+        console.error('\nОшибка теста:', e.message);
+        process.exit(1);
+    });

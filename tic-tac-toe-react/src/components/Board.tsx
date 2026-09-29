@@ -1,138 +1,183 @@
 import React from 'react';
-import type { CellValue, MatchSnapshot, MatchPlayer } from '../types';
+import type { MatchSnapshot } from '../types';
+import {
+    GRID,
+    BOX_COUNT,
+    STEP,
+    VIEW_BOX,
+    px,
+    boxRect,
+    edgePoints,
+    isHorizontal
+} from '../board';
 import './Board.css';
 
 interface BoardProps {
     snapshot: MatchSnapshot | null;
-    /** id игрока, который смотрит доску (для подсветки его выбора) */
     myId: string | null;
-    /** клетки выигрышной линии прошлого раунда; null пока линии нет */
-    winPattern: number[] | null;
-    onPickNumber: (cell: number) => void;
-    onMove: (cell: number) => void;
+    /** индекс последней проведённой линии - её подсвечиваем */
+    lastEdge: number | null;
+    onMove: (edge: number) => void;
 }
 
+// Раскладка в координатах SVG живёт в board.ts вместе с индексами.
+// Держать её здесь было бы значит дублировать числа: при изменении
+// размера поля в одном месте другое молча разъезжалось бы, и рисунок
+// уехал бы за viewBox.
 /**
- * Доска умеет три вещи:
- *  - в фазе угадайки показывает числа 1..9 и подсвечивает выбор каждого игрока
- *    своим цветом;
- *  - в фазе игры показывает X/O и разрешает ход только текущему;
- *  - в фазе выбора роли показывает выбранные числа и выбор победителя угадайки.
+ * Задержка появления точки. Идём по диагоналям, поэтому сетка проявляется
+ * волной из левого верхнего угла, а не по строкам.
  */
-const Board: React.FC<BoardProps> = ({
-    snapshot,
-    myId,
-    winPattern,
-    onPickNumber,
-    onMove
-}) => {
+const dotDelay = (r: number, c: number) => `${(r + c) * 38}ms`;
+
+const Board: React.FC<BoardProps> = ({ snapshot, myId, lastEdge, onMove }) => {
     if (!snapshot) {
         return (
             <div className="board board-empty">
-                {Array.from({ length: 9 }).map((_, i) => (
-                    <div key={i} className="cell" />
-                ))}
+                <svg viewBox={VIEW_BOX} className="board-svg">
+                    {Array.from({ length: GRID * GRID }).map((_, i) => {
+                        const r = Math.floor(i / GRID);
+                        const c = i % GRID;
+                        return (
+                            <circle
+                                key={i}
+                                cx={px(c)}
+                                cy={px(r)}
+                                r={3.5}
+                                className="dot"
+                                style={{ animationDelay: dotDelay(r, c) }}
+                            />
+                        );
+                    })}
+                </svg>
             </div>
         );
     }
 
-    const { phase, guessing, board, currentMark, players, cellNumbers } = snapshot;
-    const inGuessing = phase === 'guessing' || phase === 'roleChoice';
+    const { edges, boxOwner, turnId, danger, phase } = snapshot;
+    const myTurn = phase === 'playing' && turnId === myId;
+    const lastGained = new Set(snapshot.lastGainedBoxes ?? []);
 
-    const me = players.find(p => p.id === myId) || null;
-    const myMark = me ? me.mark : null;
-    const myTurn = phase === 'playing' && myMark !== null && currentMark === myMark;
-    const canPick =
-        phase === 'guessing' &&
-        guessing?.sub === 'picking' &&
-        me !== null &&
-        me.pick === null;
+    // Ники под доской не рисуем: в табло они уже есть, и снизу получался
+    // дубль. Раньше он вдобавок был чёрным - в CSS была переменная
+    // --text-dim, которой в проекте никто не объявлял, и цвет падал
+    // на значение по умолчанию, то есть чёрный.
+    const dangerSet = new Set(danger);
 
-    const handleClick = (index: number) => {
-        if (inGuessing) {
-            // Клик по занятой соперником клетке раньше уходил на сервер,
-            // который молча его отклонял: выглядело, что игра зависла
-            if (canPick && !players.some(p => p.pick === index)) onPickNumber(index);
-            return;
-        }
-        if (myTurn && board[index] === '') onMove(index);
+    const handleEdge = (edge: number) => {
+        if (!myTurn) return;
+        if (edges[edge] !== -1) return;
+        onMove(edge);
     };
 
-    // Пока идёт отсчёт, хлопать по клеткам бесполезно - гасим их заранее
-    const waiting = inGuessing && guessing?.sub !== 'picking';
-    const systemNumber = guessing?.systemNumber ?? null;
-
     return (
-        <div
-            className={`board ${inGuessing ? 'board-guessing' : ''} ${
-                waiting ? 'waiting' : ''
-            }`}
-        >
-            {Array.from({ length: 9 }).map((_, index) => {
-                if (inGuessing) {
-                    const taken = players.some(p => p.pick === index);
-                    // Число на клетке, которое загадала система. Условие не
-                    // привязано к sub === 'reveal': открытое число должно
-                    // гореть и на фазе выбора роли, где игрок и решает, кто
-                    // оказался ближе. systemNumber обнуляется только в
-                    // начале новой угадайки, поэтому метка гаснет сама
-                    const isSystem =
-                        systemNumber !== null &&
-                        cellNumbers[index] === systemNumber;
+        <div className={`board ${myTurn ? 'my-turn' : ''}`}>
+            <svg
+                viewBox={VIEW_BOX}
+                className="board-svg"
+                onContextMenu={e => e.preventDefault()}
+            >
+                {/* ---------- Забранные квадраты и опасные цепочки ---------- */}
+                {Array.from({ length: BOX_COUNT }).map((_, box) => {
+                    const owner = boxOwner[box];
+                    const { r, c } = boxRect(box);
+                    const x = px(c) + 4;
+                    const y = px(r) + 4;
+                    const w = STEP - 8;
+                    const isDanger = dangerSet.has(box);
+
+                    // Новый квадрат мигнёт один раз - так видно, что именно
+                    // ты только что забрал, и куда ушёл счёт
+                    const justTaken =
+                        owner !== -1 && lastGained.has(box);
 
                     return (
-                        <div
-                            key={index}
-                            className={`cell cell-number ${pickClass(index, players, myId)} ${
-                                taken ? 'taken' : ''
-                            } ${canPick && !taken ? '' : 'locked'} ${
-                                isSystem ? 'revealed' : ''
-                            }`}
-                            onClick={() => handleClick(index)}
-                        >
-                            <span className="cell-num">{cellNumbers[index]}</span>
-                            {isSystem && <span className="cell-system">загадано</span>}
-                            {pickBadge(index, players, guessing?.winnerId ?? null)}
-                        </div>
+                        <g key={`box-${box}`}>
+                            {owner !== -1 && (
+                                <rect
+                                    x={x}
+                                    y={y}
+                                    width={w}
+                                    height={w}
+                                    className={`box-fill slot-${owner} ${
+                                        justTaken ? 'just-taken' : ''
+                                    }`}
+                                />
+                            )}
+                            {isDanger && (
+                                <rect
+                                    x={x + 3}
+                                    y={y + 3}
+                                    width={w - 6}
+                                    height={w - 6}
+                                    className="box-danger"
+                                />
+                            )}
+                        </g>
                     );
-                }
+                })}
 
-                const cell: CellValue = board[index] ?? '';
-                const disabled = !myTurn || cell !== '';
-                const isWin = !!winPattern && winPattern.includes(index);
-                return (
-                    <div
-                        key={index}
-                        className={`cell ${cell ? cell.toLowerCase() : ''} ${
-                            disabled ? 'taken' : ''
-                        } ${isWin ? 'win' : ''}`}
-                        onClick={() => handleClick(index)}
-                    >
-                        {cell}
-                    </div>
-                );
-            })}
+                {/* ---------- Точки сетки ---------- */}
+                {Array.from({ length: GRID * GRID }).map((_, i) => {
+                    const r = Math.floor(i / GRID);
+                    const c = i % GRID;
+                    return (
+                        <circle
+                            key={`dot-${i}`}
+                            cx={px(c)}
+                            cy={px(r)}
+                            r={3.5}
+                            className="dot"
+                            style={{ animationDelay: dotDelay(r, c) }}
+                        />
+                    );
+                })}
+
+                {/* ---------- Проведённые линии ---------- */}
+                {edges.map((slot, edge) => {
+                    if (slot === -1) return null;
+                    const { r1, c1, r2, c2 } = edgePoints(edge);
+                    return (
+                        <line
+                            key={`line-${edge}`}
+                            x1={px(c1)}
+                            y1={px(r1)}
+                            x2={px(c2)}
+                            y2={px(r2)}
+                            className={`edge-line slot-${slot} ${
+                                edge === lastEdge ? 'is-latest' : ''
+                            }`}
+                        />
+                    );
+                })}
+
+                {/* ---------- Зоны клика по свободным линиям ---------- */}
+                {myTurn &&
+                    edges.map((slot, edge) => {
+                        if (slot !== -1) return null;
+                        const { r1, c1, r2, c2 } = edgePoints(edge);
+                        const mx = (px(c1) + px(c2)) / 2;
+                        const my = (px(r1) + px(r2)) / 2;
+                        // Полоса вдоль линии: по ней и попадает палец
+                        const w = isHorizontal(edge) ? STEP : 26;
+                        const h = isHorizontal(edge) ? 26 : STEP;
+                        return (
+                            <rect
+                                key={`hit-${edge}`}
+                                x={mx - w / 2}
+                                y={my - h / 2}
+                                width={w}
+                                height={h}
+                                className="edge-hit"
+                                onClick={() => handleEdge(edge)}
+                            >
+                                <title>Провести линию</title>
+                            </rect>
+                        );
+                    })}
+            </svg>
         </div>
     );
 };
-
-/** Класс подсветки по тому, чья это клетка. */
-function pickClass(index: number, players: MatchPlayer[], myId: string | null): string {
-    const owner = players.find(p => p.pick === index);
-    if (!owner) return '';
-    if (owner.id === myId) return 'pick-mine';
-    return 'pick-theirs';
-}
-
-/** Маленькая метка с ником выбравшего. */
-function pickBadge(index: number, players: MatchPlayer[], winnerId: string | null) {
-    const owner = players.find(p => p.pick === index);
-    if (!owner) return null;
-    return (
-        <span className={`cell-pick-owner ${owner.id === winnerId ? 'is-winner' : ''}`}>
-            {owner.username}
-        </span>
-    );
-}
 
 export default Board;

@@ -3,6 +3,9 @@ import type { ChatMessage, OnlineUser, Friend, LeaderboardEntry } from '../types
 import './SidePanel.css';
 
 interface SidePanelProps {
+    /** открыта ли панель на узком экране, где она свёрстана в оверлей */
+    isOpen: boolean;
+    onClose: () => void;
     username: string;
     chatMessages: ChatMessage[];
     online: OnlineUser[];
@@ -11,6 +14,8 @@ interface SidePanelProps {
     connected: boolean;
     /** вызов отправлен и ждём ответа */
     pendingTarget: string | null;
+    /** открыт ли рейтинговый вызов: пока нет, кнопки вызова заблокированы */
+    canChallenge: boolean;
     onSendChat: (text: string) => void;
     onChallenge: (target: string) => void;
     onCancelChallenge: () => void;
@@ -25,6 +30,8 @@ interface SidePanelProps {
 type Tab = 'online' | 'friends' | 'rating';
 
 const SidePanel: React.FC<SidePanelProps> = ({
+    isOpen,
+    onClose,
     username,
     chatMessages,
     online,
@@ -32,6 +39,7 @@ const SidePanel: React.FC<SidePanelProps> = ({
     leaderboard,
     connected,
     pendingTarget,
+    canChallenge,
     onSendChat,
     onChallenge,
     onCancelChallenge,
@@ -75,8 +83,12 @@ const SidePanel: React.FC<SidePanelProps> = ({
     const others = online.filter(u => u.username !== username);
 
     return (
-        <div className="side-panel">
-            <div className={`side-body ${activeTab === 'online' ? '' : 'no-chat'}`}>
+        <div className={`side-panel ${isOpen ? 'is-open' : ''}`}>
+            {/* Чат рисуется ВСЕГДА, а не только на вкладке «Онлайн». Раньше на
+            остальных вкладках он пропадал, колонка списка разворачивалась с
+            38% на всю ширину, и вкладки со списком прыгали при переключении.
+            Постоянная раскладка колонок убирает прыжок целиком */}
+        <div className="side-body">
                 <div className="side-list">
                     <div className="side-tabs">
                         <button
@@ -84,6 +96,14 @@ const SidePanel: React.FC<SidePanelProps> = ({
                             onClick={() => setActiveTab('online')}
                         >
                             Онлайн
+                        </button>
+                        {/* Видна только когда панель свёрстана в оверлей */}
+                        <button
+                            className="side-close"
+                            onClick={onClose}
+                            title="Закрыть панель"
+                        >
+                            ✕
                         </button>
                         <button
                             className={`side-tab ${activeTab === 'friends' ? 'active' : ''}`}
@@ -99,7 +119,10 @@ const SidePanel: React.FC<SidePanelProps> = ({
                         </button>
                     </div>
 
-                    <div className="side-scroll">
+                    {/* key обязателен: анимация появления перезапускается
+                        только при пересоздании элемента, а без него она
+                        отработает один раз и на других вкладках не будет */}
+                    <div className="side-scroll" key={activeTab}>
                         {activeTab === 'online' && (
                             <div className="online-section">
                                 <div className="online-header">
@@ -169,12 +192,14 @@ const SidePanel: React.FC<SidePanelProps> = ({
                                                     ) : (
                                                         <button
                                                             className="btn-online-challenge"
-                                                            disabled={u.inMatch}
+                                                            disabled={u.inMatch || !canChallenge}
                                                             onClick={() => onChallenge(u.username)}
                                                             title={
-                                                                u.inMatch
-                                                                    ? 'Игрок уже в матче'
-                                                                    : 'Вызвать на игру'
+                                                                !canChallenge
+                                                                    ? 'Сыграйте несколько партий, чтобы открылся рейтинг'
+                                                                    : u.inMatch
+                                                                      ? 'Игрок уже играет'
+                                                                      : 'Вызвать на игру'
                                                             }
                                                         >
                                                             {u.inMatch ? 'играет' : 'вызвать'}
@@ -267,16 +292,18 @@ const SidePanel: React.FC<SidePanelProps> = ({
                                                         ) : (
                                                             <button
                                                                 className="btn-online-challenge"
-                                                                disabled={busy}
+                                                                disabled={busy || !canChallenge}
                                                                 onClick={() =>
                                                                     onChallenge(f.username)
                                                                 }
                                                                 title={
-                                                                    !f.online
-                                                                        ? 'Игрок не в сети'
-                                                                        : f.inMatch
-                                                                            ? 'Игрок уже в матче'
-                                                                            : 'Вызвать на игру'
+                                                                    !canChallenge
+                                                                        ? 'Сыграйте несколько партий, чтобы открылся рейтинг'
+                                                                        : !f.online
+                                                                          ? 'Игрок не в сети'
+                                                                          : f.inMatch
+                                                                              ? 'Игрок уже играет'
+                                                                              : 'Вызвать на игру'
                                                                 }
                                                             >
                                                                 {f.inMatch
@@ -340,8 +367,7 @@ const SidePanel: React.FC<SidePanelProps> = ({
                     </div>
                 </div>
 
-                {activeTab === 'online' && (
-                    <div className="chat-section">
+                <div className="chat-section">
                         <div className="chat-header">Общий чат</div>
                         <div className="chat-messages">
                             {chatMessages.length === 0 && (
@@ -372,8 +398,7 @@ const SidePanel: React.FC<SidePanelProps> = ({
                                 ➤
                             </button>
                         </div>
-                    </div>
-                )}
+                </div>
             </div>
         </div>
     );

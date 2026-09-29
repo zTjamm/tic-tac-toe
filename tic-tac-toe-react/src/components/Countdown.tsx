@@ -1,33 +1,29 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { MatchSnapshot, RoundEndInfo } from '../types';
+import type { MatchSnapshot, MoveInfo } from '../types';
 import './Countdown.css';
 
 interface CountdownProps {
     snapshot: MatchSnapshot | null;
     myId: string | null;
-    /** итог последнего раунда: кто выиграл и сколько очков за это */
-    roundEnd: RoundEndInfo | null;
+    /** последний ход: сколько квадратов закрыто и чей это был ход */
+    lastMove: MoveInfo | null;
     /** оборвалась ли связь с сервером */
     offline: boolean;
-    onChooseRole: (attack: boolean) => void;
 }
 
 /**
- * Панель состояния матча: отсчёты, подсказка «ваш ход», выбор роли
- * победителем угадайки и итог прошедшего раунда. Дедлайны приходят с
- * сервера, локально только пересчитываем остаток раз в 200 мс.
+ * Панель состояния партии: отсчёт до хода, чья очередь, предупреждение о
+ * цепочке и итог последнего хода. Дедлайны приходят с сервера, локально
+ * только пересчитываем остаток раз в 200 мс.
  */
 const Countdown: React.FC<CountdownProps> = ({
     snapshot,
     myId,
-    roundEnd,
-    offline,
-    onChooseRole
+    lastMove,
+    offline
 }) => {
     // Счётчик нужен только чтобы панель перерисовывалась: остаток считается
-    // по часам в момент отрисовки, а не по значению из состояния. Когда
-    // значение лежало в состоянии, оно отставало до 200 мс, и отсчёт
-    // показывал «16 с» на пятнадцатисекундном таймере.
+    // по часам в момент отрисовки, а не по значению из состояния.
     const [, redraw] = useState(0);
 
     useEffect(() => {
@@ -35,14 +31,9 @@ const Countdown: React.FC<CountdownProps> = ({
         return () => clearInterval(t);
     }, []);
 
-    // Дедлайны приходят с сервера, то есть считаются по его часам. Часы
-    // игрока с ними могут не совпадать - на проверенной машине расхождение
-    // было 56 секунд, и отсчёт показывал «72 с» вместо пятнадцати, причём
-    // на смене хода значение не сбрасывалось, а подрастало. Снимок несёт
-    // текущий момент серверного времени: поправку считаем в момент прихода
-    // снимка, и остаток идёт по ней. Считаем здесь же, в отрисовке, а не в
-    // эффекте - иначе первая цифра после смены фазы показывалась бы
-    // неверной на один кадр.
+    // Дедлайны считаются по часам сервера, а часы игрока с ними могут
+    // не совпадать. Снимок несёт текущий момент серверного времени:
+    // поправку считаем в момент прихода снимка.
     const skew = useMemo(() => {
         if (snapshot && typeof snapshot.serverNow === 'number') {
             return snapshot.serverNow - Date.now();
@@ -51,7 +42,7 @@ const Countdown: React.FC<CountdownProps> = ({
     }, [snapshot]);
 
     // Смена фазы должна перерисовать подсказку
-    const phaseKey = snapshot ? `${snapshot.phase}:${snapshot.round}` : 'none';
+    const phaseKey = snapshot ? `${snapshot.phase}:${snapshot.turnId}` : 'none';
     const lastKey = useRef(phaseKey);
     useEffect(() => {
         if (lastKey.current !== phaseKey) {
@@ -63,130 +54,98 @@ const Countdown: React.FC<CountdownProps> = ({
     if (!snapshot) {
         return (
             <div className="countdown countdown-idle">
-                Нажмите «Игра против бота», чтобы начать матч
+                Нажмите «Играть» или «Бот», чтобы начать партию
             </div>
         );
     }
 
-    const { phase, guessing, turnDeadline, players, result } = snapshot;
-    const me = players.find(p => p.id === myId) || null;
-    const myMark = me ? me.mark : null;
-    const isMyTurn = phase === 'playing' && myMark !== null && snapshot.currentMark === myMark;
+    const { phase, startDeadline, turnDeadline, players, danger, result, timing } = snapshot;
+    const isMyTurn = phase === 'playing' && snapshot.turnId === myId;
     const opponentOffline = players.some(p => p.id !== myId && !p.connected);
 
-    const deadline = phase === 'playing' ? turnDeadline : guessing ? guessing.deadline : null;
-    // Остаток считаем по серверным часам, поэтому поправку вычитаем
-    const left = deadline ? Math.max(0, Math.ceil((deadline - Date.now() - skew) / 1000)) : null;
+    const deadline = phase === 'starting' ? startDeadline : turnDeadline;
+    const left = deadline
+        ? Math.max(0, Math.ceil((deadline - Date.now() - skew) / 1000))
+        : null;
+
+    /* Последние секунды подсвечиваем: счётчик идёт у всех, но заметить
+       взглядом, что осталось три, можно только если он покраснел. Раньше
+       оставалось догадываться, сколько ещё есть на ход */
+    const urgent = left !== null && left <= 5;
 
     return (
         <div className={`countdown countdown-${phase}`}>
-            {/* Таймер и текст живут в отдельном ряду. Раньше всё было в одну
-                строку flex, и два слота по 100% ширины выдавливали текст в
-                ноль - игрок не видел «выберите число» и не понимал, почему
-                кнопки не работают */}
             <div className="countdown-top">
-                {left !== null && <span className="countdown-timer">{left}</span>}
-
-                {phase === 'guessing' && guessing && (
-                    <div className="countdown-body">
-                        {guessing.sub === 'countdown' && (
-                            <span>Приготовьтесь выбрать число ({left} с)</span>
-                        )}
-                        {guessing.sub === 'picking' && (
-                            <span>
-                                {me && me.pick !== null
-                                    ? 'Число выбрано, ждём соперника'
-                                    : 'Выберите число от 1 до 9 на доске'}
-                            </span>
-                        )}
-                        {guessing.sub === 'reveal' && (
-                            <span>
-                                Системное число: <b>{guessing.systemNumber ?? '—'}</b>
-                            </span>
-                        )}
-                    </div>
+                {left !== null && (
+                    <span className={`countdown-timer ${urgent ? 'is-urgent' : ''}`}>
+                        {left}
+                    </span>
                 )}
 
-                {phase === 'roleChoice' && guessing && (
-                    <div className="countdown-body">
-                        {guessing.winnerId === myId ? (
-                            <div className="role-choice">
-                                <span>Вы ближе к загаданному числу. Выбирайте роль:</span>
-                                <div className="role-buttons">
-                                    <button className="btn" onClick={() => onChooseRole(true)}>
-                                        Атаковать (X)
-                                    </button>
-                                    <button
-                                        className="btn btn-role-defend"
-                                        onClick={() => onChooseRole(false)}
-                                    >
-                                        Защищаться (O)
-                                    </button>
-                                </div>
-                            </div>
-                        ) : (
-                            <span>Соперник выбирает роль…</span>
-                        )}
-                    </div>
-                )}
+                <div className="countdown-body">
+                    {phase === 'starting' && <span>Поле разметится, скоро ход</span>}
 
-                {phase === 'playing' && (
-                    <div className="countdown-body">
-                        {isMyTurn ? (
-                            <span className="your-turn">Ваш ход ({left} с)</span>
-                        ) : (
-                            <span>
-                                Ход соперника (
-                                {snapshot.players.find(p => p.mark === snapshot.currentMark)
-                                    ?.username}
-                                )
-                            </span>
-                        )}
-                    </div>
-                )}
-
-                {phase === 'finished' && result && (
-                    <div className="countdown-body">
-                        {/* Подробности показывает MatchResult выше, здесь только
-                            короткая строка, чтобы не дублировать */}
-                        <span className="match-winner">
-                            Матч окончен
-                            {result.type === 'cancelled' ? ` — ${reasonText(result.reason)}` : ''}
+                    {phase === 'playing' && isMyTurn && (
+                        <span className={`your-turn ${urgent ? 'is-urgent' : ''}`}>
+                            Ваш ход ({left} с)
                         </span>
-                    </div>
-                )}
+                    )}
+
+                    {phase === 'playing' && !isMyTurn && (
+                        <span>
+                            Ход соперника (
+                            {players.find(p => p.id === snapshot.turnId)?.username}) —{' '}
+                            {left} с
+                        </span>
+                    )}
+
+                    {phase === 'playing' && danger.length > 0 && isMyTurn && (
+                        <span className="chain-warning">
+                            Осторожно: придётся отдать {danger.length} (
+                            {danger.length === 1 ? 'квадрат' : 'квадрата'}). Красная
+                            область — она уже почти закрыта.
+                        </span>
+                    )}
+
+                    {phase === 'finished' && result && (
+                        <span className="match-winner">
+                            Партия окончена
+                            {result.type === 'cancelled'
+                                ? ` — ${reasonText(result.reason)}`
+                                : ''}
+                        </span>
+                    )}
+                </div>
             </div>
 
-            {/* Итог раунда: без него игрок видит, как изменился счёт, но не
-                понимает почему. Правила +2/+3/+1 приходилось держать в голове.
-
-                Слот рисуется всегда, пока есть матч, и имеет ФИКСИРОВАННУЮ
-                высоту. Раньше он появлялся вместе с плашкой и менял высоту
-                по длине текста - 36, потом 101, потом 84 пикселя, и каждый
-                раз доска прыгала вниз сразу после хода игрока */}
+            {/* Слот рисуется всегда и имеет фиксированную высоту: раньше
+                плашка появлялась вместе с ходом и прыгала по высоте, а это
+                дёргало доску в тот самый момент, когда игрок ходит */}
             <div className="round-slot">
-                {roundEnd && phase === 'playing' && (
-                    <div className={`round-result round-result-${roundEnd.outcome}`}>
-                        <span className="rr-label">Раунд {snapshot.round - 1}</span>
+                {lastMove && phase !== 'finished' && (
+                    <div className="round-result">
                         <span className="rr-text">
-                            {roundResultText(roundEnd, me?.isAttacker ?? false)}
+                            {lastMove.auto
+                                ? 'Время вышло — ход сделан за игрока'
+                                : lastMove.gained > 0
+                                  ? `Закрыто квадратов: ${lastMove.gained} — ход остаётся`
+                                  : 'Линия проведена, ход перешёл сопернику'}
                         </span>
                     </div>
                 )}
             </div>
 
             {/* Связь: без баннера игрок смотрит на застывшую доску и не
-                понимает, что матч вот-вот отменят. Тоже в слоте с резервом */}
+                понимает, что вот-вот засчитают обрыв связи */}
             <div className="warn-slot">
                 {offline ? (
                     <div className="conn-warning">
-                        Нет связи с сервером, переподключаемся. Матч отменится,
-                        если не вернуться вовремя.
+                        Нет связи с сервером, переподключаемся. У вас {timing.turn} с,
+                        иначе засчитается обрыв.
                     </div>
                 ) : opponentOffline && phase !== 'finished' ? (
                     <div className="conn-warning">
-                        Соперник отключился. У него {snapshot.timing.turn} с на возврат
-                        в игру.
+                        Соперник отключился. У него 15 с на возврат в игру.
                     </div>
                 ) : null}
             </div>
@@ -196,32 +155,17 @@ const Countdown: React.FC<CountdownProps> = ({
 
 function reasonText(reason?: string): string {
     switch (reason) {
-        case 'guess-timeout':
-            return 'не выбрано число за отведённое время';
-        case 'timeout':
-            return 'пропущен ход';
         case 'disconnect':
-            return 'разрыв связи';
+            return 'разрыв связи не восстановился';
         case 'strike':
-            return 'автопроигрыш: четыре нарушения';
+            return 'автопроигрыш: четыре обрыва связи';
         case 'score':
-            return 'набрано 5 очков';
+            return 'разобраны все квадраты';
+        case 'tiebreak':
+            return 'счёт 8:8, последний квадрат забрал сильнейший по времени';
         default:
             return 'причина неизвестна';
     }
-}
-
-/**
- * Человеческая формулировка исхода раунда вместе с очками.
- * Держим короткой: длинный текст переносился на несколько строк и
- * растягивал плашку, а та двигала доску.
- */
-function roundResultText(end: RoundEndInfo, iAmAttacker: boolean): string {
-    if (end.outcome === 'draw') return 'ничья: +1 защитнику';
-    if (end.outcome === 'attacker') {
-        return iAmAttacker ? 'вы атаковали и выиграли: +2' : 'атакующий выиграл: +2';
-    }
-    return iAmAttacker ? 'вы проиграли защиту: +3 сопернику' : 'вы защитились и выиграли: +3';
 }
 
 export default Countdown;

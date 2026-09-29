@@ -1,0 +1,140 @@
+/**
+ * Окно с правилами.
+ *
+ * Правил много, и они нужны постоянно, поэтому окно не растягивает
+ * страницу, а прокручивается внутри. Максимальная высота привязана к
+ * высоте окна, иначе на ноутбуке с небольшим экраном текст уезжал бы
+ * за нижний край вместе с кнопкой закрытия.
+ */
+
+.help-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2200;
+    padding: 20px;
+    animation: help-fade 0.18s ease;
+}
+
+@keyframes help-fade {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.help {
+    background: var(--container-bg);
+    border-radius: 16px;
+    width: 100%;
+    max-width: 620px;
+    /* 90dvh, а не 90vh: на телефоне 100vh учитывает адресную строку,
+       и нижние строки правил оказывались за краем экрана */
+    max-height: 90vh;
+    max-height: 90dvh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+    animation: help-in 0.2s ease;
+    overflow: hidden;
+}
+
+@keyframes help-in {
+    from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.help-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    flex: 0 0 auto;
+}
+
+.help-title {
+    font-size: 1.05em;
+    font-weight: 700;
+    color: var(--text-color);
+}
+
+.help-close {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: none;
+    background: var(--score-bg);
+    color: var(--text-muted);
+    font-size: 15px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.help-close:hover {
+    background: var(--accent);
+    color: #fff;
+}
+
+/* Прокручивается только текст: заголовок и кнопка закрытия остаются на месте */
+.help-body {
+    overflow-y: auto;
+    padding: 4px 20px 20px;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.help-section {
+    margin-top: 18px;
+}
+
+.help-section-title {
+    font-size: 0.95em;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 7px;
+}
+
+.help-body p {
+    color: var(--text-muted);
+    font-size: 0.9em;
+    line-height: 1.55;
+    margin-bottom: 8px;
+}
+
+.help-body p:last-child {
+    margin-bottom: 0;
+}
+
+.help-body b {
+    color: var(--text-color);
+}
+
+/* Второстепенная заметка: отличается от обычного текста серым курсивом,
+   но остаётся читаемой */
+.help-hint {
+    font-size: 0.87em;
+    opacity: 0.85;
+}
+
+@media (max-width: 600px) {
+    .help-overlay {
+        padding: 10px;
+    }
+    .help-body {
+        padding: 4px 14px 16px;
+    }
+}

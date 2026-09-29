@@ -2,20 +2,23 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
 import type { Socket } from 'socket.io-client';
 import { apiFetch } from '../api';
-import { playMyTurn, playRoundEnd, setTitle } from '../signals';
+import { playMyTurn, playBoxTaken, setTitle } from '../signals';
 import type {
     MatchSnapshot,
     MatchStateMessage,
     ChatMessage,
-    RoundEndInfo,
+    MoveInfo,
     OnlineUser,
     Friend,
-    LeaderboardEntry
+    LeaderboardEntry,
+    SearchState
 } from '../types';
 
 export interface IncomingChallenge {
     challengeId: string;
     from: string;
+    /** сколько секунд на ответ; окно считает сервер */
+    expiresIn?: number;
 }
 
 export interface RematchRequest {
@@ -23,15 +26,12 @@ export interface RematchRequest {
 }
 
 /**
- * Подписка на матч. Сервер — единственный источник правды по очкам, ролям и
- * таймерам: клиент только отображает снимок и отправляет действия.
+ * Подписка на партию. Сервер — единственный источник правды по очкам,
+ * таймерам и цепочкам: клиент только отображает снимок и шлёт ходы.
  */
-
 export function useMatch(username: string) {
     const [snapshot, setSnapshot] = useState<MatchSnapshot | null>(null);
-    const [lastRoundEnd, setLastRoundEnd] = useState<RoundEndInfo | null>(null);
-    /** клетки выигрышной линии последнего раунда; null если линии нет */
-    const [winPattern, setWinPattern] = useState<number[] | null>(null);
+    const [lastMove, setLastMove] = useState<MoveInfo | null>(null);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [connected, setConnected] = useState(false);
     const [online, setOnline] = useState<OnlineUser[]>([]);
@@ -41,12 +41,15 @@ export function useMatch(username: string) {
     const [notice, setNotice] = useState<string | null>(null);
     const [friends, setFriends] = useState<Friend[]>([]);
     const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+    const [search, setSearch] = useState<SearchState>({ status: 'idle' });
+    /** сколько партий сыграно: три открывают рейтинговую игру */
+    const [played, setPlayed] = useState(0);
 
     const socketRef = useRef<Socket | null>(null);
     const usernameRef = useRef(username);
     const roomRef = useRef<string | null>(null);
     // Обработчики сокета поднимаются один раз, а loadFriends пересоздаётся
-    // на каждый рендер - через ref достаём актуальную без переподписки
+    // для каждого рендера - через ref достаём актуальную без переподписки
     const loadFriendsRef = useRef<() => void>(() => {});
 
     useEffect(() => {
@@ -55,7 +58,7 @@ export function useMatch(username: string) {
 
     // Ник появляется ПОСЛЕ входа, а сокет к этому моменту уже подключён,
     // поэтому событие connect уже прошло. Отправляем ник отдельным эффектом,
-    // иначе сервер не узнает игрока и матч не создастся.
+    // иначе сервер не узнает игрока и партия не начнётся.
     useEffect(() => {
         if (!username) return;
         const s = socketRef.current;
@@ -73,7 +76,6 @@ export function useMatch(username: string) {
             setConnected(true);
             socket.emit('userOnline', { username: usernameRef.current });
 
-            // Вернулись в матч после обрыва - забираем состояние
             fetch('/api/chat-history')
                 .then(r => (r.ok ? r.json() : []))
                 .then((history: ChatMessage[]) => {
@@ -86,23 +88,24 @@ export function useMatch(username: string) {
         socket.on('match:state', (msg: MatchStateMessage) => {
             roomRef.current = msg.snapshot.roomId;
             setSnapshot(msg.snapshot);
-            // Матч начался, значит вызов принят. Иначе кнопка «вызвать»
+
+            // Партия началась, значит вызов принят. Иначе кнопка «вызвать»
             // навсегда оставалась в состоянии «ждём» до следующей попытки
-            if (msg.snapshot.phase !== 'finished') setPendingTarget(null);
-            if (msg.type === 'roundEnd' && msg.extra) {
-                setLastRoundEnd(msg.extra);
-                // Сервер отдаёт клетки выигрышной линии - доска их подсветит.
-                // При ничьей winPattern равен null
-                setWinPattern(msg.extra.winPattern);
-                playRoundEnd();
+            if (msg.snapshot.phase !== 'finished') {
+                setPendingTarget(null);
+                setSearch({ status: 'idle' });
             }
-            // Начался новый раунд - линии прошлого на доске уже нет.
-            // lastRoundEnd здесь НЕ трогаем: движок шлёт roundEnd, а следом
-            // сразу roundStart, и обнуление в том же тике убивало плашку
-            // с итогом раунда раньше, чем она успевала отрисоваться
-            if (msg.type === 'roundStart' || msg.type === 'guessStart') {
-                setWinPattern(null);
+
+            if (msg.type === 'move' && msg.extra) {
+                setLastMove(msg.extra);
+                if (msg.extra.gained > 0) playBoxTaken();
             }
+            // Каждая партия засчитывается в счётчик, который открывает
+            // рейтинговую игру после трёх партий
+            if (msg.snapshot.phase === 'finished') {
+                setPlayed(p => p + 1);
+            }
+
             announce(msg.snapshot, usernameRef.current);
         });
 
@@ -122,9 +125,25 @@ export function useMatch(username: string) {
             setIncoming(data);
         });
 
+        // Вызов отозван истёкшим окном или отозванным поиском: окно надо
+        // закрыть, иначе игрок будет нажимать «принять» в пустоту
+        socket.on('challengeWithdrawn', () => {
+            setIncoming(null);
+        });
+
         socket.on('challengeDeclined', (data: { by: string }) => {
             setPendingTarget(null);
             setNotice(`${data.by} отклонил вызов`);
+        });
+
+        // Окно ответа истекло - вызов считается отказом
+        socket.on('challengeExpired', (data: { challengeId: string; by: string }) => {
+            setPendingTarget(prev => (prev === data.by ? null : prev));
+            setIncoming(prev => (prev && prev.challengeId === data.challengeId ? null : prev));
+        });
+
+        socket.on('search:state', (state: SearchState) => {
+            setSearch(state);
         });
 
         socket.on('rematchRequested', (data: RematchRequest) => {
@@ -152,10 +171,10 @@ export function useMatch(username: string) {
         // реванша бессмысленно, поэтому тоже уходим в меню
         socket.on('match:exit', (data: { by: string }) => {
             setSnapshot(null);
-            setLastRoundEnd(null);
+            setLastMove(null);
             setRematchRequest(null);
             setPendingTarget(null);
-            setNotice(`${data.by} вышел из матча`);
+            setNotice(`${data.by} вышел из партии`);
             resetSignals();
         });
 
@@ -171,29 +190,34 @@ export function useMatch(username: string) {
         s.emit(event, { roomId: roomRef.current, ...payload });
     }, []);
 
+    /** Партия с ботом. Кнопка доступна всегда, даже во время подбора. */
     const startBotMatch = useCallback(() => {
         setSnapshot(null);
-        setLastRoundEnd(null);
+        setLastMove(null);
         roomRef.current = null;
+        setSearch({ status: 'idle' });
         socketRef.current?.emit('match:startBot');
+    }, []);
+
+    /** Поиск живого соперника: вызовы случайным игрокам по очереди. */
+    const findMatch = useCallback(() => {
+        setSnapshot(null);
+        setLastMove(null);
+        roomRef.current = null;
+        socketRef.current?.emit('match:find');
+    }, []);
+
+    const cancelSearch = useCallback(() => {
+        socketRef.current?.emit('match:findCancel');
+        setSearch({ status: 'idle' });
     }, []);
 
     const syncMatch = useCallback(() => {
         socketRef.current?.emit('match:sync', {});
     }, []);
 
-    const pickNumber = useCallback(
-        (cell: number) => emitMatch('match:pick', { cell }),
-        [emitMatch]
-    );
-
-    const chooseRole = useCallback(
-        (attack: boolean) => emitMatch('match:role', { attack }),
-        [emitMatch]
-    );
-
     const makeMove = useCallback(
-        (cell: number) => emitMatch('match:move', { cell }),
+        (edge: number) => emitMatch('match:move', { edge }),
         [emitMatch]
     );
 
@@ -201,23 +225,21 @@ export function useMatch(username: string) {
         socketRef.current?.emit('sendGlobalChat', { text });
     }, []);
 
-    // Закрыть матч на экране (сервер продолжает помнить его для реванша)
+    // Закрыть партию на экране (сервер продолжает помнить её для реванша)
     const clearMatch = useCallback(() => {
         setSnapshot(null);
-        setLastRoundEnd(null);
-        setWinPattern(null);
+        setLastMove(null);
         resetSignals();
     }, []);
 
-    /* ------------------------ выход из матча ------------------------ */
+    /* ------------------------ выход из партии ------------------------ */
 
     // Игрок нажал «В меню»: сервер выведет и соперника, чтобы тот не
-    // остался один на экране законченного матча
+    // остался один на экране законченной партии
     const leaveMatch = useCallback(() => {
         socketRef.current?.emit('match:leave');
         setSnapshot(null);
-        setLastRoundEnd(null);
-        setWinPattern(null);
+        setLastMove(null);
         setPendingTarget(null);
         resetSignals();
     }, []);
@@ -304,6 +326,17 @@ export function useMatch(username: string) {
         }
     }, []);
 
+    // Счётчик партий нужен для гейта: пока их меньше трёх, рейтинговая
+    // кнопка заблокирована
+    const loadProfile = useCallback(async () => {
+        try {
+            const data = await apiFetch<{ played?: number }>('/api/profile');
+            if (typeof data.played === 'number') setPlayed(data.played);
+        } catch {
+            /* сеть недоступна - оставляем как есть */
+        }
+    }, []);
+
     // Дружба взаимная, поэтому после любого изменения перечитываем список:
     // у соперника тоже могла появиться или исчезнуть
     const addFriend = useCallback(
@@ -343,10 +376,13 @@ export function useMatch(username: string) {
         if (username) loadFriends();
     }, [username, online, loadFriends]);
 
+    useEffect(() => {
+        if (username) loadProfile();
+    }, [username, loadProfile]);
+
     return {
         snapshot,
-        lastRoundEnd,
-        winPattern,
+        lastMove,
         messages,
         connected,
         online,
@@ -356,10 +392,12 @@ export function useMatch(username: string) {
         notice,
         friends,
         leaderboard,
+        search,
+        played,
         startBotMatch,
+        findMatch,
+        cancelSearch,
         syncMatch,
-        pickNumber,
-        chooseRole,
         makeMove,
         sendChat,
         clearMatch,
@@ -391,7 +429,7 @@ function resetSignals() {
 
 /**
  * Ставит заголовок вкладки и пищит, когда очередь перешла к игроку.
- * Отслеживает именно переход, а не сам факт: иначе сигнал повторялся бы
+ * Отслеживаем именно переход, а не сам факт: иначе сигнал повторялся бы
  * на каждом снимке, то есть несколько раз в секунду.
  */
 function announce(snapshot: MatchSnapshot, myId: string) {
@@ -399,16 +437,14 @@ function announce(snapshot: MatchSnapshot, myId: string) {
         setTitle('finished');
         return;
     }
-    const me = snapshot.players.find(p => p.id === myId);
-    const myTurn =
-        snapshot.phase === 'playing' &&
-        me !== undefined &&
-        snapshot.currentMark === me.mark;
+    const myTurn = snapshot.phase === 'playing' && snapshot.turnId === myId;
 
     setTitle(myTurn ? 'myTurn' : 'playing');
 
     if (myTurn) {
-        const key = `${snapshot.roomId}:${snapshot.round}:${snapshot.currentMark}`;
+        // Ключ включает число оставшихся линий: после закрытия квадрата
+        // игрок ходит снова, и это разные ходы при одном turnId
+        const key = `${snapshot.roomId}:${snapshot.movesLeft}`;
         if (key !== lastMyTurnKey) {
             lastMyTurnKey = key;
             playMyTurn();

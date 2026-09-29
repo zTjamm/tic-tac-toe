@@ -8,10 +8,12 @@ interface MatchResultProps {
     onRematch: () => void;
     onExit: () => void;
     canRematch: boolean;
+    /** партия с ботом рейтинга не двигает - это надо сказать прямо */
+    isBotMatch: boolean;
 }
 
 /**
- * Экран итогов матча. Показывает, кто победил и почему матч закончился,
+ * Экран итогов партии. Показывает счёт по квадратам, кто победил и почему,
  * и предлагает реванш или возврат в меню.
  */
 const MatchResult: React.FC<MatchResultProps> = ({
@@ -19,9 +21,10 @@ const MatchResult: React.FC<MatchResultProps> = ({
     myId,
     onRematch,
     onExit,
-    canRematch
+    canRematch,
+    isBotMatch
 }) => {
-    const { result, players, round } = snapshot;
+    const { result, players, totalBoxes, movesLeft } = snapshot;
     if (!result) return null;
 
     const me = players.find(p => p.id === myId) || null;
@@ -33,7 +36,7 @@ const MatchResult: React.FC<MatchResultProps> = ({
     let tone: string;
 
     if (result.type === 'cancelled') {
-        title = 'Матч отменён';
+        title = 'Партия прервана';
         tone = 'cancelled';
     } else if (iWon) {
         title = 'Вы победили';
@@ -46,10 +49,6 @@ const MatchResult: React.FC<MatchResultProps> = ({
         tone = 'other';
     }
 
-    // round - это номер раунда, который шёл. При победе он уже завершён
-    // (finish() не увеличивает счётчик), при отмене - нет.
-    const roundsPlayed = result.type === 'cancelled' ? round - 1 : round;
-
     return (
         <div className={`match-result match-result-${tone}`}>
             <div className="match-result-title">{title}</div>
@@ -59,10 +58,11 @@ const MatchResult: React.FC<MatchResultProps> = ({
                 {players.map(p => (
                     <div
                         key={p.id}
-                        className={`result-player ${
+                        className={`result-player slot-${p.slot} ${
                             result.winnerId === p.id ? 'is-winner' : ''
                         }`}
                     >
+                        <span className="mark" />
                         <span className="name">
                             {p.username}
                             {p.id === myId ? ' (вы)' : ''}
@@ -73,11 +73,17 @@ const MatchResult: React.FC<MatchResultProps> = ({
             </div>
 
             <div className="match-result-meta">
-                Сыграно раундов: {Math.max(0, roundsPlayed)}
+                Закрыто {totalBoxes} квадратов · осталось линий: {movesLeft}
                 {opponent ? ` · соперник: ${opponent.username}` : ''}
             </div>
 
-            <RatingChange snapshot={snapshot} myId={myId} />
+            {isBotMatch ? (
+                <div className="rating-change is-neutral">
+                    <span className="rc-why">Партия с ботом, рейтинг не изменился</span>
+                </div>
+            ) : (
+                <RatingChange snapshot={snapshot} myId={myId} />
+            )}
 
             <div className="match-result-actions">
                 <button
@@ -98,16 +104,14 @@ const MatchResult: React.FC<MatchResultProps> = ({
 
 function reasonText(reason?: string): string {
     switch (reason) {
-        case 'guess-timeout':
-            return 'кто-то не выбрал число за отведённое время';
-        case 'timeout':
-            return 'кто-то не успел сделать ход';
         case 'disconnect':
             return 'разрыв связи не восстановился';
         case 'strike':
-            return 'автопроигрыш: четыре нарушения';
+            return 'автопроигрыш: четыре обрыва связи';
         case 'score':
-            return 'набрано 5 очков';
+            return 'разобраны все квадраты, у кого больше — тот и выиграл';
+        case 'tiebreak':
+            return 'счёт 8:8: выиграл тот, кто забрал последний квадрат';
         default:
             return '';
     }
@@ -134,8 +138,6 @@ const RatingChange: React.FC<{ snapshot: MatchSnapshot; myId: string | null }> =
 
     const opponent = players.find(p => p.id !== myId) || null;
     const before = me.rating - delta;
-    // У бота дельты нет, но рейтинг у него настоящий (1000) - снимок его
-    // отдаёт, и сравнение с ним осмысленно
     const oppDelta = opponent ? ratingDelta[opponent.id] ?? 0 : 0;
     const oppBefore = opponent ? opponent.rating - oppDelta : 0;
 

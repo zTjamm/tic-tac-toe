@@ -5,8 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const cors = require('cors');
-const { MatchManager } = require('./match-manager');
-const { STRIKE_LIMIT } = require('./match');
+const { MatchManager, BOT_RATING } = require('./match-manager');
 const { matchDeltas } = require('./rating');
 
 const app = express();
@@ -50,12 +49,27 @@ const sessions = new Map();
 const onlineUsers = new Map();
 const friends = new Map();
 const pendingChallenges = new Map();
+/** username -> поиск рейтингового соперника. См. startSearch() */
+const searches = new Map();
+
+/** Сколько партий нужно сыграть, прежде чем откроется рейтинговая игра.
+    Порог одноразовый: он считает все партии, а не только игры с ботом,
+    и больше не влияет ни на что. Смысл - не дать новичку сразу попасть
+    в игру с теми, кто играет давно. */
+const RATED_UNLOCK_GAMES = 3;
+
+/** Окно ответа на вызов. Не ответил - считается отказом, и поиск идёт
+    к следующему игроку. Без потолка: игрок сам решает, когда ему надоело. */
+const CHALLENGE_WINDOW_MS = 10000;
 
 function loadUsers() {
     try {
         if (fs.existsSync(USERS_FILE)) {
             const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
             for (const [username, userData] of Object.entries(data)) {
+                // played появился вместе с «точками и квадратами»;
+                // у старых аккаунтов поля нет, и без него гейт не откроется
+                if (typeof userData.played !== 'number') userData.played = 0;
                 users.set(username, userData);
                 if (userData.friends) {
                     friends.set(username, new Set(userData.friends));
@@ -92,6 +106,26 @@ function generateToken() {
 
 loadUsers();
 
+/** Открыт ли игроку рейтинговый матч. */
+function canPlayRated(username) {
+    const user = users.get(username);
+    return !!user && (user.played || 0) >= RATED_UNLOCK_GAMES;
+}
+
+function publicUser(user) {
+    return {
+        username: user.username,
+        rating: user.rating,
+        wins: user.wins,
+        losses: user.losses,
+        draws: user.draws,
+        streak: user.streak,
+        maxStreak: user.maxStreak,
+        played: user.played || 0,
+        canPlayRated: (user.played || 0) >= RATED_UNLOCK_GAMES
+    };
+}
+
 app.post('/api/register', (req, res) => {
     const { username, password } = req.body;
 
@@ -120,6 +154,7 @@ app.post('/api/register', (req, res) => {
         draws: 0,
         streak: 0,
         maxStreak: 0,
+        played: 0,
         history: [],
         createdAt: new Date().toISOString()
     };
@@ -133,19 +168,7 @@ app.post('/api/register', (req, res) => {
         socketId: null
     });
 
-    res.json({
-        success: true,
-        token,
-        user: {
-            username: userData.username,
-            rating: userData.rating,
-            wins: userData.wins,
-            losses: userData.losses,
-            draws: userData.draws,
-            streak: userData.streak,
-            maxStreak: userData.maxStreak
-        }
-    });
+    res.json({ success: true, token, user: publicUser(userData) });
 });
 
 app.post('/api/login', (req, res) => {
@@ -166,19 +189,7 @@ app.post('/api/login', (req, res) => {
         socketId: null
     });
 
-    res.json({
-        success: true,
-        token,
-        user: {
-            username: user.username,
-            rating: user.rating,
-            wins: user.wins,
-            losses: user.losses,
-            draws: user.draws,
-            streak: user.streak,
-            maxStreak: user.maxStreak
-        }
-    });
+    res.json({ success: true, token, user: publicUser(user) });
 });
 
 app.get('/api/profile', (req, res) => {
@@ -194,16 +205,7 @@ app.get('/api/profile', (req, res) => {
         return res.status(401).json({ error: 'Пользователь не найден' });
     }
 
-    res.json({
-        username: user.username,
-        rating: user.rating,
-        wins: user.wins,
-        losses: user.losses,
-        draws: user.draws,
-        streak: user.streak,
-        maxStreak: user.maxStreak,
-        history: user.history.slice(-10)
-    });
+    res.json({ ...publicUser(user), history: user.history.slice(-10) });
 });
 
 app.get('/api/leaderboard', (req, res) => {
@@ -228,14 +230,7 @@ app.get('/api/chat-history', (req, res) => {
 });
 
 app.get('/api/online', (req, res) => {
-    const onlineList = Array.from(onlineUsers.values()).map(u => {
-        const user = users.get(u.username);
-        return {
-            username: u.username,
-            rating: user?.rating || 1000
-        };
-    });
-    res.json(onlineList);
+    res.json(onlineList());
 });
 
 app.get('/api/friends', (req, res) => {
@@ -325,43 +320,70 @@ app.post('/api/friends/remove', (req, res) => {
     res.json({ success: true, message: 'Друг удалён' });
 });
 
+/* ====================== вызовы и подбор соперника ====================== */
+
+/**
+ * Отправляет вызов игроку и ставит таймер окна ответа. Если за
+ * CHALLENGE_WINDOW_MS ответа нет, вызов снимается и о вызывающему
+ * сообщается через onExpire (для поиска это переход к следующему игроку).
+ */
+function sendChallenge(from, to, onExpire) {
+    const challengeId = generateToken();
+    const timer = setTimeout(() => {
+        pendingChallenges.delete(challengeId);
+        if (onExpire) onExpire();
+    }, CHALLENGE_WINDOW_MS);
+    if (timer.unref) timer.unref();
+
+    pendingChallenges.set(challengeId, {
+        id: challengeId,
+        from,
+        to,
+        timer
+    });
+
+    const targetSocket = onlineUsers.get(to)?.socketId;
+    if (targetSocket) {
+        io.to(targetSocket).emit('challengeReceived', {
+            challengeId,
+            from,
+            expiresIn: CHALLENGE_WINDOW_MS
+        });
+    }
+    return challengeId;
+}
+
 app.post('/api/challenge/send', (req, res) => {
     const token = req.headers.authorization?.replace('Bearer ', '');
     const session = sessions.get(token);
     const { targetUsername } = req.body;
 
-    console.log('[Server] challenge/send:', { from: session?.username, to: targetUsername });
-
     if (!session) {
-        console.log('[Server] challenge/send: unauthorized');
         return res.status(401).json({ error: 'Не авторизован' });
     }
 
     if (!onlineUsers.has(targetUsername)) {
-        console.log('[Server] challenge/send: target not online');
         return res.status(400).json({ error: 'Пользователь не в сети' });
     }
 
     // Нельзя вызвать того, кто уже в матче
     if (matchManager.roomOf(targetUsername)) {
-        console.log('[Server] challenge/send: target already in match');
         return res.status(400).json({ error: 'Пользователь уже в игре' });
     }
 
-    const challengeId = generateToken();
-    pendingChallenges.set(challengeId, {
-        from: session.username,
-        to: targetUsername,
-        createdAt: Date.now()
-    });
-
-    const targetSocket = onlineUsers.get(targetUsername)?.socketId;
-    if (targetSocket) {
-        io.to(targetSocket).emit('challengeReceived', {
-            challengeId,
-            from: session.username
-        });
+    // Рейтинговый вызов от человека, который сам ещё не дорос до
+    // рейтинговой игры, запрещён: иначе гейт на 3 партии обходится,
+    // вызвав кого-то одного вместо подбора
+    if (!canPlayRated(session.username)) {
+        return res.status(400).json({ error: 'Сначала сыграйте несколько партий' });
     }
+
+    const challengeId = sendChallenge(session.username, targetUsername, () => {
+        const sid = onlineUsers.get(session.username)?.socketId;
+        if (sid) {
+            io.to(sid).emit('challengeExpired', { challengeId, by: targetUsername });
+        }
+    });
 
     res.json({ success: true, challengeId });
 });
@@ -381,8 +403,15 @@ app.post('/api/challenge/accept', (req, res) => {
     }
 
     pendingChallenges.delete(challengeId);
+    clearTimeout(challenge.timer);
 
     const opponent = challenge.from;
+    // Соперник мог уже начать матч, пока висел его вызов
+    if (matchManager.roomOf(opponent) || matchManager.roomOf(session.username)) {
+        return res.status(400).json({ error: 'Кто-то уже играет' });
+    }
+
+    stopSearch(opponent);
     const roomId = startHumanMatch(opponent, session.username);
 
     res.json({ success: true, roomId });
@@ -403,6 +432,7 @@ app.post('/api/challenge/decline', (req, res) => {
     }
 
     pendingChallenges.delete(challengeId);
+    clearTimeout(challenge.timer);
 
     const fromSocket = onlineUsers.get(challenge.from)?.socketId;
     if (fromSocket) {
@@ -415,12 +445,6 @@ app.post('/api/challenge/decline', (req, res) => {
 const chatHistory = [];
 const MAX_CHAT_HISTORY = 100;
 
-// Бот играет с постоянным рейтингом: иначе новичок, побеждающий бота,
-// получал бы полные очки, а бот - неполные, и рейтинг новичка разгонялся
-// слишком быстро. 1000 - стартовое значение игрока, поэтому игра с ботом
-// не меняет рейтинг вообще.
-const BOT_RATING = 1000;
-
 const matchManager = new MatchManager(io, {
     // Рейтинг игрока для снимка матча: клиенту нужно, чтобы объяснить,
     // почему за эту победу дали не два очка, а три
@@ -429,14 +453,22 @@ const matchManager = new MatchManager(io, {
     // они останутся занятыми и их нельзя будет вызвать на новую игру
     onFinish: () => broadcastOnline(),
     onResult: (winner, loser, result) => {
+        // Матч с ботом рейтинга не двигает. Проверяем, что бот участвовал
+        // в паре, а не что он выиграл: раньше проверка стояла на «победитель
+        // не бот», и когда человек проигрывал боту, его рейтинг всё равно
+        // падал - а это ровно тот случай, когда падать нельзя.
+        // Плюс с эlo-дельтами новичок, обыгравший бота, получал бы полные
+        // очки и разгонялся слишком быстро.
+        const involvesBot = (winner && winner.isBot) || (loser && loser.isBot);
+        if (involvesBot) return null;
+
+        const winnerUser = winner ? users.get(winner.username) : null;
+        const loserUser = loser ? users.get(loser.username) : null;
+        if (!winnerUser && !loserUser) return null;
+
         // Дельты считаются по рейтингам обоих ДО изменения, иначе победитель
         // посчитался бы по старому рейтингу соперника, а тот - уже по своему
         // новому, и сумма очков в матче перестала бы сходиться к нулю
-        const winnerName = winner && !winner.isBot ? winner.username : null;
-        const loserName = loser && !loser.isBot ? loser.username : null;
-        const winnerUser = winnerName ? users.get(winnerName) : null;
-        const loserUser = loserName ? users.get(loserName) : null;
-
         const { win, loss } = matchDeltas(
             winnerUser ? winnerUser.rating : BOT_RATING,
             loserUser ? loserUser.rating : BOT_RATING
@@ -455,11 +487,13 @@ const matchManager = new MatchManager(io, {
         // Возвращаем дельты: менеджер положит их в снимок, чтобы экран
         // итогов показал «рейтинг 1000 -> 1002», а не просто «победа»
         const deltas = {};
-        if (winnerName) deltas[winnerName] = win;
-        if (loserName) deltas[loserName] = loss;
+        if (winnerUser) deltas[winnerUser.username] = win;
+        if (loserUser) deltas[loserUser.username] = loss;
         return deltas;
     }
 });
+
+/* ------------------------------ подбор ------------------------------ */
 
 // Ник, объявленный сокетом. Нужен отдельно onlineUsers: там запись может
 // ещё не появиться (или уже быть удалена другим сокетом), и обработчики
@@ -501,8 +535,121 @@ function broadcastOnline() {
     io.emit('onlineUsersUpdate', { online: onlineList() });
 }
 
+function emitSearchState(username, state) {
+    const sid = onlineUsers.get(username)?.socketId;
+    if (sid) io.to(sid).emit('search:state', state);
+}
+
+/** Кого можно вызвать: онлайн, свободен, ищет соперника, и это не я. */
+function candidatesFor(username) {
+    const out = [];
+    for (const [name] of onlineUsers) {
+        if (name === username) continue;
+        if (matchManager.roomOf(name)) continue;
+        if (searches.has(name)) continue; // он уже кого-то ищет сам
+        out.push(name);
+    }
+    return out;
+}
+
+/**
+ * Подбор рейтингого соперника. Кандидаты перемешиваются, и вызовы идут
+ * по одному: не ответил за 10 секунд - следующий.
+ *
+ * Порядок важен. Сначала соединяем тех, кто уже ищет: если ищут двое,
+ * они играют друг с другом мгновенно, и вызовы вообще не нужны. Только
+ * когда остаётся нечётный человек, он начинает пинить случайных - и
+ * пинит всегда один, поэтому спама не возникает.
+ */
+function startSearch(username) {
+    stopSearch(username);
+
+    // Свободный игрок, который уже ищет соперника. Проверка своя, а не через
+    // candidatesFor: тот отбрасывает ищущих, а соединить мы хотим именно их.
+    for (const other of searches.keys()) {
+        if (other === username) continue;
+        if (!onlineUsers.has(other) || matchManager.roomOf(other)) continue;
+        stopSearch(other);
+        // Собственному состоянию ищущего тоже надо закрыться: он ведь только
+        // нажал «Играть», и без этого панель подбора осталась бы висеть
+        // поверх начавшейся партии
+        emitSearchState(username, { status: 'idle' });
+        startHumanMatch(other, username);
+        return;
+    }
+
+    const pool = candidatesFor(username);
+    if (pool.length === 0) {
+        emitSearchState(username, { status: 'done', reason: 'empty' });
+        return;
+    }
+
+    // Перемешиваем один раз перед началом обхода: по списку онлайна
+    // вызовы всегда доставались бы первому по имени
+    for (let i = pool.length - 1; i > 0; i--) {
+        const j = crypto.randomInt(i + 1);
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
+    const state = { candidates: pool, index: 0, currentChallenge: null };
+    searches.set(username, state);
+    challengeNext(username);
+}
+
+function challengeNext(username) {
+    const state = searches.get(username);
+    if (!state) return;
+
+    while (state.index < state.candidates.length) {
+        const target = state.candidates[state.index++];
+        if (!onlineUsers.has(target) || matchManager.roomOf(target)) continue;
+
+        state.currentChallenge = sendChallenge(username, target, () => {
+            // Окно истекло: вызов считается отказом, идём к следующему
+            if (state.currentChallenge !== null && searches.get(username) === state) {
+                emitSearchState(username, {
+                    status: 'searching',
+                    checked: state.index,
+                    total: state.candidates.length,
+                    by: target
+                });
+                challengeNext(username);
+            }
+        });
+
+        emitSearchState(username, {
+            status: 'searching',
+            checked: state.index,
+            total: state.candidates.length,
+            by: target
+        });
+        return;
+    }
+
+    searches.delete(username);
+    emitSearchState(username, { status: 'done', reason: 'exhausted' });
+}
+
+function stopSearch(username) {
+    const state = searches.get(username);
+    if (!state) return;
+    searches.delete(username);
+    if (state.currentChallenge) {
+        const challenge = pendingChallenges.get(state.currentChallenge);
+        if (challenge) {
+            pendingChallenges.delete(state.currentChallenge);
+            clearTimeout(challenge.timer);
+            // Вызванному игроку окно нужно закрыть, иначе он увидит
+            // вызов, на который уже никто не ждёт
+            const sid = onlineUsers.get(challenge.to)?.socketId;
+            if (sid) io.to(sid).emit('challengeWithdrawn');
+        }
+    }
+    emitSearchState(username, { status: 'idle' });
+}
+
 // Создаёт матч между двумя людьми, сажает оба сокета в комнату и
-// отправляет им состояние. Матч сразу стартует с угадайки 1-го раунда.
+// отправляет им состояние.
 // oldRoom - комната предыдущего матча: из неё надо выйти, иначе игрок
 // продолжит получать снимки того матча, который уже закончился.
 function startHumanMatch(a, b, oldRoom = null) {
@@ -517,6 +664,11 @@ function startHumanMatch(a, b, oldRoom = null) {
     if (oldRoom) matchManager.dispose(oldRoom);
 
     const { roomId } = matchManager.createHumanMatch(a, b);
+    // Счётчик партий живёт здесь, а не в вызывающих местах: старых путей
+    // было три (вызов, подбор, реванш), и один из них рано или поздно
+    // забыли бы. Он же открывает рейтинговую игру после трёх партий.
+    countPlayed(a);
+    countPlayed(b);
     for (const name of [a, b]) {
         const sid = onlineUsers.get(name)?.socketId;
         const sock = sid ? io.sockets.sockets.get(sid) : null;
@@ -531,6 +683,7 @@ function startHumanMatch(a, b, oldRoom = null) {
             io.to(sid).emit('match:state', { type: 'sync', extra: null, snapshot: snap });
         }
     }
+    console.log(`[Match] матч ${roomId}: ${a} и ${b}`);
     broadcastOnline();
     return roomId;
 }
@@ -564,6 +717,14 @@ function applyStats(user, result, delta) {
     saveUsers();
 }
 
+/** Считает сыгранную партию для гейта «три партии до рейтинга». */
+function countPlayed(username) {
+    const user = users.get(username);
+    if (!user) return;
+    user.played = (user.played || 0) + 1;
+    saveUsers();
+}
+
 io.on('connection', (socket) => {
     console.log(`Подключился: ${socket.id}`);
 
@@ -593,6 +754,17 @@ io.on('connection', (socket) => {
                 socket.join(roomId);
                 matchManager.handleReconnect(username);
             }
+
+            // Присылаем состояние поиска: игрок мог открыть страницу заново
+            // посреди подбора соперника
+            if (searches.has(username)) {
+                const state = searches.get(username);
+                emitSearchState(username, {
+                    status: 'searching',
+                    checked: state.index,
+                    total: state.candidates.length
+                });
+            }
         }
     });
 
@@ -609,6 +781,9 @@ io.on('connection', (socket) => {
     socket.on('match:startBot', () => {
         const username = resolvePlayer(socket.id);
         if (!username) return;
+        // Кнопка «с ботом» доступна всегда, даже во время поиска: игрок
+        // передумал ждать живого соперника
+        stopSearch(username);
         // Игрок не может быть в двух матчах одновременно
         const existing = matchManager.roomOf(username);
         if (existing) {
@@ -623,33 +798,20 @@ io.on('connection', (socket) => {
 
         const { roomId } = matchManager.createBotMatch(username);
         socket.join(roomId);
+        countPlayed(username);
         // Первое состояние уходит в broadcast до того, как сокет вошёл в
         // комнату, поэтому шлём снимок явно - иначе клиент ничего не увидит
-        // до следующего события (через 5 секунд отсчёта).
+        // до следующего события (через 3 секунды отсчёта).
         const snap = matchManager.snapshotOf(roomId);
         if (snap) socket.emit('match:state', { type: 'sync', extra: null, snapshot: snap });
         console.log(`[Match] бот-матч ${roomId}: ${username}`);
     });
 
-    socket.on('match:pick', (data) => {
-        const username = usernameBySocket(socket.id);
-        const { roomId, cell } = data || {};
-        if (!username || !roomId) return;
-        matchManager.pick(roomId, username, cell);
-    });
-
-    socket.on('match:role', (data) => {
-        const username = usernameBySocket(socket.id);
-        const { roomId, attack } = data || {};
-        if (!username || !roomId) return;
-        matchManager.chooseRole(roomId, username, attack);
-    });
-
     socket.on('match:move', (data) => {
         const username = usernameBySocket(socket.id);
-        const { roomId, cell } = data || {};
+        const { roomId, edge } = data || {};
         if (!username || !roomId) return;
-        matchManager.move(roomId, username, cell);
+        matchManager.move(roomId, username, edge);
     });
 
     socket.on('match:sync', () => {
@@ -660,6 +822,29 @@ io.on('connection', (socket) => {
         socket.join(roomId);
         const snap = matchManager.snapshotOf(roomId);
         if (snap) socket.emit('match:state', { type: 'sync', extra: null, snapshot: snap });
+    });
+
+    /* ==================== подбор рейтингового матча ==================== */
+
+    socket.on('match:find', () => {
+        const username = resolvePlayer(socket.id);
+        if (!username) return;
+
+        if (matchManager.roomOf(username)) {
+            emitSearchState(username, { status: 'done', reason: 'inMatch' });
+            return;
+        }
+        if (!canPlayRated(username)) {
+            emitSearchState(username, { status: 'done', reason: 'locked' });
+            return;
+        }
+        startSearch(username);
+    });
+
+    socket.on('match:findCancel', () => {
+        const username = usernameBySocket(socket.id);
+        if (!username) return;
+        stopSearch(username);
     });
 
     /* ================ сетевой матч: вызов и реванш ================ */
@@ -776,6 +961,10 @@ io.on('connection', (socket) => {
         socketUsernames.delete(socket.id);
         if (!name) return;
 
+        // Ушедшего со счёта не ищем: его вызов всё равно истёк бы по таймеру,
+        // но он не должен висеть в памяти до конца окна
+        stopSearch(name);
+
         // Удаляем из онлайна только если запись всё ещё указывает на этот сокет:
         // игрок мог открыть вторую вкладку и уже перерегистрироваться
         const entry = onlineUsers.get(name);
@@ -794,7 +983,7 @@ app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
         return next();
     }
-    // Запрос статического файла (есть расширение), которого нет в dist —
+    // Запрос статического файла (есть расширение), которого нет в dist -
     // отдаём 404, а не index.html. Иначе браузер попытается выполнить
     // HTML как JS и покажет непонятную ошибку вместо ясного 404.
     if (path.extname(req.path)) {

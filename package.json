@@ -1,16 +1,23 @@
 {
-  "name": "tic-tac-toe-online",
-  "version": "1.0.0",
-  "description": "Игра крестики-нолики онлайн с мультиплеером",
+  "name": "dots-and-boxes-online",
+  "version": "2.0.0",
+  "description": "Точки и квадраты онлайн с подбором соперника, рейтингом и ботом",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node test-dots.js && node test-rating.js && node test-geometry.js",
+    "test:online": "node test-online.js",
+    "test:matchmaking": "node test-matchmaking.js",
+    "test:integration": "node test-integration.js",
+    "test:timers": "node test-timers.js",
+    "build": "cd tic-tac-toe-react && npm run build"
   },
   "keywords": [
-    "tic-tac-toe",
+    "dots-and-boxes",
     "multiplayer",
-    "websocket"
+    "websocket",
+    "game"
   ],
   "author": "zTjamm",
   "license": "MIT",

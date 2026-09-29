@@ -1,12 +1,15 @@
 /**
- * Проверка таймеров матча с секундомером.
+ * Проверка таймеров партии секундомером.
  *
  * Не доверяем конфигурации: ждём реального перехода фаз и меряем.
  * Сверяем и с тем, что сервер сам объявляет в snapshot.timing.
  *
+ * В новой игре фазы две: подготовка к партии и ход. Проверяем обе, плюс
+ * что ход по таймеру не наказывается и партия продолжается.
+ *
  * Запуск:
  *   node test-timers.js
- *   $env:SERVER_URL='https://mypoddomenjm.mooo.com'; node test-timers.js
+ *   $env:SERVER_URL='https://example.com'; node test-timers.js
  */
 
 const { io } = require('socket.io-client');
@@ -17,13 +20,8 @@ const A = PREFIX + 'a';
 const B = PREFIX + 'b';
 const PASSWORD = 'pass1234';
 
-// Заявленные правилами значения. Снимок отдаёт их в миллисекундах.
-const EXPECTED_MS = {
-    guessCountdown: 5000,
-    guessPick: 10000,
-    guessRole: 15000,
-    turn: 15000
-};
+/** Сколько ждём на каждый таймер: ожидаемое + запас на сеть */
+const SLACK = 4000;
 
 let failed = 0;
 function check(name, ok, info) {
@@ -37,15 +35,15 @@ function check(name, ok, info) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const now = () => Date.now();
 
-function client(username) {
+function client(username, token) {
     const socket = io(URL, { transports: ['websocket'] });
     const st = {
         username,
         socket,
         snapshot: null,
         challenge: null,
-        token: null,
-        // момент последнего снимка и когда он пришёл
+        token,
+        // момент получения последнего снимка от сервера
         seenAt: 0,
         lastType: null
     };
@@ -58,226 +56,149 @@ function client(username) {
     return st;
 }
 
+/** Ждём снимка, подходящего под условие. getter обязателен: состояние
+    живёт во внешнем объекте и передать его значением нельзя. */
+function waitFor(get, predicate, timeoutMs = 25000) {
+    return new Promise((resolve, reject) => {
+        const ok = () => { const v = get(); return v && predicate(v); };
+        if (ok()) return resolve(get());
+        const started = now();
+        const t = setInterval(() => {
+            if (ok()) { clearInterval(t); resolve(get()); }
+            else if (now() - started > timeoutMs) {
+                clearInterval(t);
+                reject(new Error('ожидание истекло'));
+            }
+        }, 25);
+    });
+}
+
 async function register(username) {
-    const reg = await fetch(`${URL}/api/register`, {
+    const res = await fetch(`${URL}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: PASSWORD })
-    }).then(r => r.json());
-    if (reg.token) return reg.token;
-    const login = await fetch(`${URL}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password: PASSWORD })
-    }).then(r => r.json()).then(d => d.token);
-    return login;
-}
-
-async function until(fn, ms, label) {
-    const end = now() + ms;
-    while (now() < end) {
-        if (fn()) return true;
-        await sleep(30);
-    }
-    if (label) check(label, false, 'не дождались');
-    return false;
-}
-
-const timer = setTimeout(() => {
-    console.log('\n  ТАЙМАУТ: сценарий не уложился в 120 секунд');
-    process.exit(1);
-}, 120000);
-
-let a, b;
-
-/** Разм��ивает комплект текстов о таймерах в снимке. */
-function timing(s) {
-    return s && s.timing ? s.timing : null;
-}
-
-/**
- * Сколько секунд покажет игроку таймер в этот снимок.
- *
- * Клиент считает остаток как deadline минус свои часы, а с поправкой на
- * разницу часов - как deadline минус serverNow. Именно это значение и
- * проверяем: оно не зависит от того, насколько часы машины, с которой
- * идёт тест, отличаются от серверных.
- */
-function shown(s) {
-    if (!s || typeof s.serverNow !== 'number') return null;
-    const deadline = s.phase === 'playing' ? s.turnDeadline : s.guessing ? s.guessing.deadline : null;
-    return deadline === null || deadline === undefined ? null : (deadline - s.serverNow) / 1000;
-}
-
-function checkShown(name, s, lo, hi) {
-    const v = shown(s);
-    check(
-        name,
-        v !== null && v > lo && v < hi,
-        v === null ? 'нет serverNow' : Math.round(v * 10) / 10
-    );
+    });
+    if (!res.ok) throw new Error(`регистрация ${username}: ${res.status}`);
+    const data = await res.json();
+    return data.token;
 }
 
 async function main() {
-    console.log(`\nТаймеры на ${URL}`);
-    a = client(A);
-    b = client(B);
+    // Регистрируем ДО создания сокетов. io() начинает подключаться сразу,
+    // и если сначала дождаться регистрации (сетевой запрос), событие connect
+    // успеет произойти до подписки на него - и ожидание зависнет навсегда.
+    const tokenA = await register(A);
+    const tokenB = await register(B);
 
-    await until(() => a.socket.connected && b.socket.connected, 10000);
-    a.token = await register(A);
-    b.token = await register(B);
-    a.socket.emit('userOnline', { username: A });
-    b.socket.emit('userOnline', { username: B });
-    await sleep(300);
+    const ca = client(A, tokenA);
+    const cb = client(B, tokenB);
 
-    // --- объявленные сервером значения ---
-    const sent = await fetch(`${URL}/api/challenge/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${a.token}` },
-        body: JSON.stringify({ targetUsername: B })
-    }).then(r => r.json());
-    check('вызов принят сервером', sent.success === true, sent);
-    await until(() => b.challenge, 8000);
-    const accepted = await fetch(`${URL}/api/challenge/accept`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${b.token}` },
-        body: JSON.stringify({ challengeId: b.challenge.challengeId })
-    }).then(r => r.json());
-    check('матч создан', !!accepted.roomId, accepted);
+    await Promise.all([
+        new Promise(r => ca.socket.on('connect', r)),
+        new Promise(r => cb.socket.on('connect', r))
+    ]);
+    ca.socket.emit('userOnline', { username: A });
+    cb.socket.emit('userOnline', { username: B });
+    await sleep(400);
 
-    // --- 1. тайминги, объявленные сервером ---
-    await until(() => a.snapshot && a.snapshot.phase === 'guessing', 8000);
-    const guessSeenAt = a.seenAt;
-    const t = timing(a.snapshot);
-    check('сервер объявляет тайминги', !!t, t);
-    if (t) {
-        check('отсчёт угадайки = 5000 мс', t.guessCountdown === EXPECTED_MS.guessCountdown, t.guessCountdown);
-        check('выбор числа = 10000 мс', t.guessPick === EXPECTED_MS.guessPick, t.guessPick);
-        check('выбор роли = 15000 мс', t.guessRole === EXPECTED_MS.guessRole, t.guessRole);
+    /* ---------- Подготовка к партии ---------- */
+    console.log('\nТаймер подготовки:');
+    cb.snapshot = null;
+    const startBotAt = now();
+    ca.socket.emit('match:startBot');
+
+    await waitFor(() => ca.snapshot, s => s.phase === 'starting');
+    check('пришла фаза подготовки', ca.snapshot.phase === 'starting');
+    check('сервер объявил время подготовки',
+        typeof ca.snapshot.timing.start === 'number' && ca.snapshot.timing.start > 0,
+        ca.snapshot.timing.start);
+
+    const startMs = ca.snapshot.timing.start;
+    const playedAt = await waitFor(() => ca.snapshot, s => s.phase === 'playing');
+    const startMeasured = now() - startBotAt;
+    check(
+        `подготовка длится около ${startMs / 1000} с`,
+        startMeasured >= startMs * 0.6 && startMeasured <= startMs + SLACK,
+        { measured: startMeasured, expected: startMs }
+    );
+    check('в начале ходов есть дедлайн хода',
+        typeof playedAt.turnDeadline === 'number' && playedAt.turnDeadline > 0);
+
+    /* ---------- Таймер хода ---------- */
+    console.log('\nТаймер хода:');
+    check('сервер объявил время хода',
+        typeof playedAt.timing.turn === 'number' && playedAt.timing.turn > 0,
+        playedAt.timing.turn);
+
+    const turnMs = playedAt.timing.turn;
+    // Замерять надо очередь ИГРОКА, а не первый ход партии: кто ходит
+    // первым, решает жеребьёвка, и если первым окажется бот, он сделает
+    // ход через 700 мс - это не таймаут, и проверка была бы нестабильной.
+    const beforeMyTurn = ca.snapshot;
+    await waitFor(
+        () => ca.snapshot,
+        s => s.phase === 'finished' || s.turnId === A || s.movesLeft < beforeMyTurn.movesLeft,
+        turnMs + SLACK + 4000
+    );
+    await waitFor(() => ca.snapshot, s => s.phase === 'playing' && s.turnId === A,
+        turnMs + SLACK + 4000);
+    const myTurnMovesLeft = ca.snapshot.movesLeft;
+
+    const turnStartAt = now();
+    // Ждём, пока сервер сам сделает ход по таймеру за игрока
+    const afterTimeout = await waitFor(
+        () => ca.snapshot,
+        s => s.phase === 'finished' || s.movesLeft < myTurnMovesLeft,
+        turnMs + SLACK + 4000
+    );
+    const turnMeasured = now() - turnStartAt;
+
+    check(
+        `ход по таймауту случился около ${turnMs / 1000} с`,
+        turnMeasured >= turnMs * 0.6 && turnMeasured <= turnMs + SLACK,
+        { measured: turnMeasured, expected: turnMs }
+    );
+    check('после таймаута линий стало меньше',
+        afterTimeout.movesLeft < myTurnMovesLeft,
+        { before: myTurnMovesLeft, after: afterTimeout.movesLeft });
+
+    /* ---------- Таймаут не наказывается и партия продолжается ---------- */
+    console.log('\nТаймаут хода не наказывается:');
+    check('партия после таймаута не отменена',
+        afterTimeout.phase !== 'finished' || afterTimeout.result.type === 'finished',
+        afterTimeout.phase);
+    check('счётчик обрывов у игрока нулевой',
+        afterTimeout.players.every(p => p.strikes === 0),
+        afterTimeout.players.map(p => p.strikes));
+
+    // Доигрываем партию до финала: она обязана завершиться, а не зависнуть
+    const guard = now() + 90000;
+    while (ca.snapshot && ca.snapshot.phase === 'playing' && now() < guard) {
+        const s = ca.snapshot;
+        if (s.turnId === A) {
+            const free = s.edges.map((v, i) => (v === -1 ? i : -1)).filter(i => i >= 0);
+            if (free.length === 0) break;
+            ca.socket.emit('match:move', { roomId: s.roomId, edge: free[0] });
+        }
+        await sleep(80);
     }
-    check('снимок несёт серверное время', typeof a.snapshot?.serverNow === 'number', a.snapshot?.serverNow);
-    checkShown('таймер отсчёта показывает около 5 с', a.snapshot, 3.5, 5.5);
+    check('партия доигралась после таймаутов',
+        ca.snapshot && ca.snapshot.phase === 'finished', ca.snapshot && ca.snapshot.phase);
+    check('таймаут не оборвал партию досрочно',
+        ca.snapshot && ca.snapshot.result.reason === 'score',
+        ca.snapshot && ca.snapshot.result.reason);
 
-    // Замер отсчёта: от первого снимка фазы guessing до подфазы picking
-    await until(
-        () => a.snapshot?.guessing?.sub === 'picking',
-        12000,
-        'окно выбора открылось'
-    );
-    const pickOpenAt = a.seenAt;
-    const countdownElapsed = (pickOpenAt - guessSeenAt) / 1000;
-    check(
-        'отсчёт перед выбором длится около 5 с',
-        countdownElapsed > 4 && countdownElapsed < 7,
-        Math.round(countdownElapsed * 10) / 10
-    );
-    checkShown('таймер выбора числа показывает около 10 с', a.snapshot, 8.5, 10.5);
+    ca.socket.close();
+    cb.socket.close();
+}
 
-    // --- 2. окно выбора: НИКТО не выбирает, ждём отмены ---
-    await until(
-        () => a.snapshot?.phase === 'finished',
-        16000,
-        'матч отменился по таймауту выбора'
-    );
-    const pickElapsed = (a.seenAt - pickOpenAt) / 1000;
-    check(
-        'окно выбора длится около 10 с',
-        pickElapsed > 8.5 && pickElapsed < 12,
-        Math.round(pickElapsed * 10) / 10
-    );
-    check(
-        'причина отмены - не выбрано число',
-        a.snapshot?.result?.reason === 'guess-timeout',
-        a.snapshot?.result
-    );
-
-    // --- 3. таймер хода: матч доигрываем, оба не ходим ---
-    // Id прошлого вызова снимаем ДО отправки нового. Иначе гонка: событие
-    // на сокет приходит раньше, чем тест разберёт HTTP-ответ, и в сокете
-    // уже лежит новый вызов - сравнивать его с самим собой бесполезно.
-    const staleId = b.challenge ? b.challenge.challengeId : null;
-    const rematch = await fetch(`${URL}/api/challenge/send`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${a.token}` },
-        body: JSON.stringify({ targetUsername: B })
-    }).then(r => r.json());
-    check('повторный вызов принят', rematch.success === true, rematch);
-    // Ждём именно новый вызов, а не первый попавшийся в сокете
-    await until(
-        () => b.challenge && b.challenge.challengeId !== staleId,
-        10000,
-        'новый вызов пришёл'
-    );
-    check('пришёл именно новый вызов', b.challenge.challengeId === rematch.challengeId, {
-        got: b.challenge.challengeId,
-        sent: rematch.challengeId
+main()
+    .then(() => {
+        console.log(failed === 0 ? '\nВсе проверки пройдены' : `\nПровалено: ${failed}`);
+        process.exit(failed === 0 ? 0 : 1);
+    })
+    .catch(e => {
+        console.error('\nОшибка теста:', e.message);
+        process.exit(1);
     });
-    const accepted2 = await fetch(`${URL}/api/challenge/accept`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${b.token}` },
-        body: JSON.stringify({ challengeId: b.challenge.challengeId })
-    }).then(r => r.json());
-    check('повторный матч создан', !!accepted2.roomId, accepted2);
-
-    // Оба выбирают число, но роль не выбираем - её назначит сервер по таймеру
-    await until(
-        () => a.snapshot?.guessing?.sub === 'picking',
-        15000,
-        'окно выбора открылось снова'
-    );
-    const roomId = a.snapshot.roomId;
-    a.socket.emit('match:pick', { roomId, cell: 0 });
-    b.socket.emit('match:pick', { roomId, cell: 1 });
-    await until(() => a.snapshot?.phase === 'roleChoice', 8000, 'фаза выбора роли');
-    checkShown('таймер выбора роли показывает около 15 с', a.snapshot, 13.5, 15.5);
-
-    // Замер окна выбора роли: оба молчат, сервер назначит роль по таймауту
-    const roleStart = now();
-    await until(
-        () => a.snapshot?.phase === 'playing',
-        25000,
-        'роль назначена автоматически'
-    );
-    const roleElapsed = (now() - roleStart) / 1000;
-    check(
-        'роль назначается примерно через 15 с',
-        roleElapsed > 13.5 && roleElapsed < 18.5,
-        Math.round(roleElapsed * 10) / 10
-    );
-
-    // --- 4. таймер хода: никто не ходит ---
-    checkShown('таймер хода показывает около 15 с', a.snapshot, 13.5, 15.5);
-    const turnStart = now();
-    await until(
-        () => a.snapshot?.phase === 'finished',
-        25000,
-        'матч завершился по таймауту хода'
-    );
-    const turnElapsed = (now() - turnStart) / 1000;
-    check(
-        'ход отнимает примерно 15 с',
-        turnElapsed > 13.5 && turnElapsed < 18.5,
-        Math.round(turnElapsed * 10) / 10
-    );
-    check(
-        'причина - пропущенный ход',
-        a.snapshot?.result?.reason === 'timeout',
-        a.snapshot?.result
-    );
-
-    console.log(failed === 0 ? '\nТаймеры в порядке\n' : `\nПровалено: ${failed}\n`);
-    cleanup(failed === 0 ? 0 : 1);
-}
-
-function cleanup(code) {
-    clearTimeout(timer);
-    if (a) a.socket.close();
-    if (b) b.socket.close();
-    process.exit(code);
-}
-
-main().catch(e => {
-    console.log('\n  FAIL исключение: ' + e.message);
-    console.log(e.stack);
-    cleanup(1);
-});

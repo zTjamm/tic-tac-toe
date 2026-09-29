@@ -67,6 +67,30 @@
     background: var(--accent);
 }
 
+/* Последние пять секунд. Счётчик одинаковый весь ход, и без этой подсветки
+   оставалось догадываться, сколько ещё есть времени: цифра меняется
+   незаметно, а промах по таймеру обиднее, чем просто подумать */
+.countdown-timer.is-urgent {
+    background: var(--danger-stroke);
+    animation: urgent-pulse 0.7s ease-in-out infinite;
+}
+
+.your-turn.is-urgent {
+    color: var(--danger-stroke);
+}
+
+@keyframes urgent-pulse {
+    0%,
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(211, 47, 47, 0.45);
+    }
+    50% {
+        transform: scale(1.09);
+        box-shadow: 0 0 0 7px rgba(211, 47, 47, 0);
+    }
+}
+
 .countdown-body {
     flex: 1;
     min-width: 0;
@@ -78,7 +102,7 @@
 
 .your-turn {
     font-weight: 700;
-    color: var(--x-color);
+    color: var(--slot-a);
 }
 
 .role-choice {

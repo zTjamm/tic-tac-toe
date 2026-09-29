@@ -35,13 +35,39 @@
     --input-bg: #fff;
     --input-border: #ddd;
     --input-focus: #667eea;
+
+    /* Цвета двух игроков. Объявлены здесь, а не в Board.css, потому что
+       используются в четырёх компонентах: доска, табло, легенда и итог */
+    --slot-a: #1976d2;
+    --slot-b: #c2185b;
+    --slot-a-bg: #e3f2fd;
+    --slot-b-bg: #fce4ec;
+    --dot-color: #555d6e;
+    /* Подсветка цепочки, которую игрок обязан отдать. Красная намеренно:
+       это потеря очков, и она должна читаться как опасность, а не как
+       обычный элемент оформления */
+    --danger: #ffcdd2;
+    --danger-stroke: #d32f2f;
+    --hit-hover: rgba(102, 126, 234, 0.22);
+
+    /* Внутренние отступы страницы. Вынесены в переменную, потому что от
+       них зависит высота игрового экрана: припартия страница должна
+       помещаться в окно целиком, а в меню прокручивается свободно */
+    --page-pad: 20px;
+
+    /* Разделитель блоков. В светлой теме панель, список и чат одного цвета,
+       и без линии между ними не видно, где кончается одно и начинается
+       другое. Тёмная, а не --border-color: та слишком светлая и на белом
+       фоне почти не читается */
+    --divider: #d7dbe4;
+    --chat-bg: #f7f8fc;
 }
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background: var(--bg-gradient);
     min-height: 100vh;
-    padding: 20px;
+    padding: var(--page-pad);
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -79,6 +105,20 @@ html {
     --draw-bg: #4a3c1a;
     --input-bg: #262640;
     --input-border: #3a3a52;
+
+    /* В тёмной теме цвета игроков светлее: на тёмном фоне насыщенный синий
+       и малиновый почти не видны, а доска - это главное на экране */
+    --slot-a: #64b5f6;
+    --slot-b: #f48fb1;
+    --slot-a-bg: #1e3a5f;
+    --slot-b-bg: #4a2740;
+    --dot-color: #9aa0b4;
+    --danger: #5a2020;
+    --danger-stroke: #ff8a80;
+    --hit-hover: rgba(130, 150, 240, 0.28);
+
+    --divider: #454561;
+    --chat-bg: #24243c;
 }
 
 /* РћСЃРЅРѕРІРЅРѕР№ layout: РІРµСЂС…РЅСЏСЏ РїР°РЅРµР»СЊ, Р·Р°С‚РµРј РґРѕСЃРєР° СЃР»РµРІР° Рё РїР°РЅРµР»СЊ СЃРїСЂР°РІР°.
@@ -94,11 +134,20 @@ html {
 }
 
 .app.with-game {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 20px;
-    align-items: flex-start;
+    /* Игровой экран - сетка, а не flex с переносом. В flex-wrap строки
+       получают высоту по содержимому, из-за чего колонка с доской
+       вырастала за пределы окна. Здесь вторая строка получает остаток
+       высоты гарантированно, а minmax(0, 1fr) запрещает ей раздуваться
+       содержимым, поэтому доска всегда влезает целиком. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
+    column-gap: 20px;
+    row-gap: 16px;
+    height: calc(100vh - var(--page-pad) * 2);
+    height: calc(100dvh - var(--page-pad) * 2);
+    overflow: hidden;
+    flex: 0 0 auto;
 }
 
 /* РљРЅРѕРїРєР° С‚РµРјС‹ Р¶РёРІС‘С‚ РІ РІРµСЂС…РЅРµР№ РїР°РЅРµР»Рё */
@@ -113,11 +162,31 @@ html {
     flex: 0 0 100%;
 }
 
-.top-bar {
+/* Шапка: верхняя панель и, во время подбора, панель поиска.
+   Обёрнута в один элемент, чтобы в сетке занимать одну строку: при flex-wrap
+   число строк зависело бы от наличия панели поиска, и вторая строка
+   считалась бы по содержимому, а не по высоте окна */
+.app-header {
+    grid-column: 1 / -1;
     display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.app-header .top-bar,
+.app-header .search-bar {
+    margin-bottom: 0;
+}
+
+.top-bar {
+    /* Три колонки: ник, заголовок, кнопки. Крайние одинаковые, поэтому
+       заголовок действительно по центру, а не «примерно посередине
+       оставшегося места» */
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
     gap: 12px;
-    flex-wrap: wrap;
     margin-bottom: 16px;
     padding: 10px 14px;
     background: var(--container-bg);
@@ -129,7 +198,10 @@ html {
     font-weight: 700;
     font-size: 1.05em;
     color: var(--text-color);
-    margin-right: auto;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
 }
 
 .top-bar-user {
@@ -139,12 +211,16 @@ html {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Ник в первой колонке сетки прижат вправо, иначе пустое место
+       оказывалось слева от него */
+    text-align: left;
 }
 
 .top-bar-actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 /* Квадратная кнопка: иконка сверху, короткая подпись снизу.
@@ -241,15 +317,26 @@ html {
 .game-area {
     flex: 1 1 auto;
     min-width: 300px;
-    max-width: 520px;
-    margin: 0 auto;
+    max-width: 560px;
+    min-height: 0;
+    display: flex;
+    /* Именно justify-self, а не margin: 0 auto. В гриде авто-margin
+       отменяет растягивание, и элемент получает ширину по содержимому
+       вместо max-width - доска сжималась в узкую полосу, а место справа
+       пустовало */
+    justify-self: center;
+    width: 100%;
 }
 
 .container {
     background: var(--container-bg);
     border-radius: 20px;
-    padding: 30px;
+    padding: 22px;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 h1 {
@@ -349,20 +436,119 @@ h1 {
 /* РњРѕР±РёР»СЊРЅС‹Рµ: РґРѕСЃРєР° Рё РїР°РЅРµР»СЊ РІ СЃС‚РѕР»Р±РёРє. РџСЂР°РІРёР»Р° .app/.top-bar РґРѕР»Р¶РЅС‹ РёРґС‚Рё
    РїРѕСЃР»Рµ Р±Р°Р·РѕРІС‹С… (РѕРЅРё Р·РґРµСЃСЊ), РёРЅР°С‡Рµ РїРµСЂРµР±СЊСЋС‚СЃСЏ РїРѕСЂСЏРґРєРѕРј РїРѕРґРєР»СЋС‡РµРЅРёСЏ. */
 @media (max-width: 900px) {
+    /* Одна колонка: панель уходит под доску. Раньше здесь стояло
+       flex-direction: column - правило из времён flex-раскладки, которое
+       в гриде не делает ничего, и панель шириной 396 продолжала жать
+       доску до ~240 пикселей */
     .app.with-game {
-        flex-direction: column;
-        align-items: stretch;
+        grid-template-columns: minmax(0, 1fr);
+        /* Нижняя строка ограничена числом, а не auto. При auto панель
+           растягивалась по своему содержимому и отбирала высоту у доски -
+           поле схлопывалось в несколько пикселей */
+        grid-template-rows: auto minmax(0, 1fr);
         padding-right: 0;
     }
 
     .game-area {
-        max-width: 100%;
+        max-width: 560px;
+    }
+
+    /* Панель уходит из сетки в оверлей поверх доски. Сдвиг вправо
+       вместо display: none - чтобы открывалась анимацией */
+    .app.with-game .side-panel {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: min(360px, 88vw);
+        max-width: none;
+        border-radius: 16px 0 0 16px;
+        z-index: 2060;
+        transform: translateX(100%);
+        transition: transform 0.22s ease;
+    }
+
+    .app.with-game .side-panel.is-open {
+        transform: translateX(0);
+    }
+
+    /* Крестик закрытия нужен только в оверлейном режиме */
+    .app.with-game .side-close {
+        display: block;
+    }
+}
+
+/* Панель открыта - освобождаем под неё место, чтобы поле не накрывалось.
+   Только на достаточно широком экране: на узком освободившееся место
+   меньше самой доски, и та сжималась бы до 96 пикселей. Там оставляем
+   обычное перекрытие - кнопка закрытия и затемнение всё равно рядом */
+@media (min-width: 820px) and (max-width: 900px) {
+    .app.with-game.panel-is-open {
+        padding-right: min(360px, 88vw);
+    }
+}
+
+/* Затемнение под открытой панелью: показывает, что панель поверх игры,
+   и даёт привычный способ выйти - клик мимо неё */
+.panel-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 2055;
+    animation: backdrop-in 0.2s ease;
+}
+
+@keyframes backdrop-in {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+.panel-toggle {
+    display: none;
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    width: 52px;
+    height: 52px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 21px;
+    line-height: 1;
+    cursor: pointer;
+    /* Выше панели (2060). Раньше было 2050, и кнопка закрытия уезжала
+       под панель: закрыв доску, игрок не мог её вернуть */
+    z-index: 2070;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    transition: right 0.22s ease, background 0.15s;
+}
+
+.panel-toggle:hover {
+    background: var(--accent-hover);
+}
+
+/* Открытая панель отодвигает кнопку к своему левому краю, чтобы она не
+   закрывала собой поле ввода чата */
+.panel-toggle.is-open {
+    right: calc(min(360px, 88vw) + 14px);
+}
+
+@media (max-width: 900px) {
+    .panel-toggle {
+        display: flex;
     }
 }
 
 @media (max-width: 480px) {
-    body {
-        padding: 10px;
+    :root {
+        --page-pad: 10px;
     }
     .container {
         padding: 15px;

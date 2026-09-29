@@ -1,4 +1,5 @@
 node_modules/
+tic-tac-toe-react/node_modules/
 .git/
 .gitignore
 .dockerignore

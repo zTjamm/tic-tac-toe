@@ -1,12 +1,9 @@
-export type PlayerSymbol = 'X' | 'O';
-export type CellValue = PlayerSymbol | '';
-
-export interface ChatMessage {
+export type ChatMessage = {
     sender: string;
     text: string;
     socketId: string;
     timestamp: number;
-}
+};
 
 export interface LeaderboardEntry {
     username: string;
@@ -23,83 +20,95 @@ export interface Friend {
     username: string;
     rating: number;
     online: boolean;
-}
-
-/* ===================== матч «до 5 очков» (снимок с сервера) ===================== */
-
-export type MatchPhase = 'guessing' | 'roleChoice' | 'playing' | 'finished';
-export type GuessSub = 'countdown' | 'picking' | 'reveal';
-
-export interface MatchPlayer {
-    id: string;
-    username: string;
-    mark: PlayerSymbol;
-    score: number;
-    isBot: boolean;
-    connected: boolean;
-    /** клетка, выбранная в угадайке; null если ещё не выбрал */
-    pick: number | null;
-    isAttacker: boolean;
-    isGuessWinner: boolean;
-    /** рейтинг до матча: по нему объясняется размер изменения */
-    rating: number;
-    /** накопленные нарушения; 3 означает, что следующее приведёт к автопроигрышу */
+    inMatch: boolean;
     strikes: number;
 }
 
-export interface Guessing {
-    sub: GuessSub;
-    /** число, открытое системой; null пока не открыто */
-    systemNumber: number | null;
-    winnerId: string | null;
-    deadline: number | null;
+/* ==================== «Точки и квадраты» (снимок с сервера) ==================== */
+
+export type MatchPhase = 'starting' | 'playing' | 'finished';
+
+export interface MatchPlayer {
+    id: string;
+    /** номер игрока в снимке: в edges и boxOwner хранятся именно слоты */
+    slot: number;
+    username: string;
+    /** закрытые квадраты */
+    score: number;
+    isBot: boolean;
+    connected: boolean;
+    /** рейтинг до матча: по нему объясняется размер изменения */
+    rating: number;
+    /** накопленные обрывы связи; 3 означает автопроигрыш при следующем */
+    strikes: number;
 }
 
-export interface MatchResult {
+export type MatchResult = {
     type: 'finished' | 'cancelled';
-    winnerId?: string;
+    winnerId?: string | null;
     reason?: string;
-}
+};
 
 export interface MatchSnapshot {
     roomId: string;
     phase: MatchPhase;
-    round: number;
-    maxRounds: number;
-    targetScore: number;
-    board: CellValue[];
-    currentMark: PlayerSymbol | null;
-    attackerId: string | null;
+    /** точек по стороне: 5 даёт 16 квадратов и 40 линий */
+    grid: number;
+    /** 40 элементов: -1 - линия не проведена, иначе слот игрока */
+    edges: number[];
+    /** 16 элементов: -1 - квадрат не забран, иначе слот игрока */
+    boxOwner: number[];
+    turnId: string | null;
+    /** кто ходил первым; ход первого обычно сильнее, и это стоит показать */
+    firstId: string | null;
+    startDeadline: number | null;
     turnDeadline: number | null;
-    deadline: number | null;
     /** момент серверного времени на момент снимка; поправка к часам игрока */
     serverNow?: number;
     result: MatchResult | null;
-    cellNumbers: number[];
+    totalBoxes: number;
+    totalEdges: number;
+    boxesLeft: number;
+    /** сколько линий осталось провести: конец партии становится зрелищем */
+    movesLeft: number;
+    /** квадраты, которые игрок, которому ход, обязан отдать */
+    danger: number[];
+    /** квадраты, забранные последним ходом: доска мигает ими */
+    lastGainedBoxes: number[];
     players: MatchPlayer[];
-    guessing: Guessing | null;
     timing: {
-        guessCountdown: number;
-        guessPick: number;
-        guessRole: number;
+        start: number;
         turn: number;
     };
     /** изменение рейтинга по игрокам при финале; null пока матч не закончен */
     ratingDelta: Record<string, number> | null;
 }
 
+export interface MoveInfo {
+    edge: number;
+    playerId: string;
+    /** сколько квадратов забранно этим ходом */
+    gained: number;
+    /** ход остался у игрока: он закрыл квадрат и ходит снова */
+    extraTurn: boolean;
+    /** ход сделан сервером за игрока по таймауту */
+    auto: boolean;
+}
+
 export interface MatchStateMessage {
     type: string;
-    extra: RoundEndInfo | null;
+    extra: MoveInfo | null;
     snapshot: MatchSnapshot;
 }
 
-export interface RoundEndInfo {
-    outcome: 'attacker' | 'defender' | 'draw';
-    gainA: number;
-    gainD: number;
-    winPattern: number[] | null;
-}
+/* ============================== подбор соперника ============================== */
+
+export type SearchReason = 'empty' | 'exhausted' | 'locked' | 'inMatch';
+
+export type SearchState =
+    | { status: 'idle' }
+    | { status: 'searching'; checked: number; total: number; by?: string }
+    | { status: 'done'; reason: SearchReason };
 
 export interface OnlineUser {
     username: string;
@@ -107,14 +116,5 @@ export interface OnlineUser {
     /** уже в матче — вызов ему недоступен */
     inMatch: boolean;
     /** накопленные нарушения, чтобы видеть, кто рискует автопроигрышем */
-    strikes: number;
-}
-
-/** Друг из /api/friends: сервер хранит дружбу взаимной. */
-export interface Friend {
-    username: string;
-    rating: number;
-    online: boolean;
-    inMatch: boolean;
     strikes: number;
 }

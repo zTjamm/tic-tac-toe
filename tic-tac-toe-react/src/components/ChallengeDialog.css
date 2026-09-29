@@ -1,75 +1,87 @@
-.dialog-overlay {
+/* ------------------------- вызов на игру -------------------------
+
+   Карточка висит в углу, а не по центру экрана: вызов приходит
+   случайному игроку, и он может в этот момент вести партию. Модальное
+   окно перекрыло бы поле и выглядело как зависание игры. */
+
+.challenge-card {
     position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    right: 20px;
+    top: 76px;
+    z-index: 2100;
+    background: var(--container-bg);
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    padding: 14px 16px;
+    width: 260px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.35);
+    animation: card-in 0.22s ease;
+}
+
+@keyframes card-in {
+    from {
+        opacity: 0;
+        transform: translateX(24px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.challenge-head {
     display: flex;
     align-items: center;
-    justify-content: center;
-    z-index: 2000;
-    padding: 20px;
-    animation: overlay-in 0.2s ease;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
 }
 
-@keyframes overlay-in {
-    from {
-        opacity: 0;
-    }
-    to {
-        opacity: 1;
-    }
-}
-
-.dialog {
-    background: var(--container-bg);
-    border-radius: 14px;
-    padding: 22px;
-    max-width: 340px;
-    width: 100%;
-    text-align: center;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
-    animation: dialog-in 0.25s ease;
-}
-
-@keyframes dialog-in {
-    from {
-        opacity: 0;
-        transform: translateY(-10px) scale(0.97);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
-}
-
-.dialog-title {
-    font-size: 1.15em;
+.challenge-title {
+    font-size: 0.95em;
     font-weight: 700;
     color: var(--text-color);
-    margin-bottom: 8px;
 }
 
-.dialog-text {
+/* Окно ответа: игрок должен видеть, что ждать недолго и безнадёжно */
+.challenge-timer {
+    font-size: 0.8em;
+    font-weight: 700;
     color: var(--text-muted);
-    font-size: 0.92em;
-    margin-bottom: 18px;
-    line-height: 1.5;
+    background: var(--score-bg);
+    border-radius: 8px;
+    padding: 1px 7px;
+    font-variant-numeric: tabular-nums;
 }
 
-.dialog-text b {
+.challenge-text {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    line-height: 1.45;
+    margin-bottom: 12px;
+}
+
+.challenge-text b {
     color: var(--text-color);
 }
 
-.dialog-actions {
+.challenge-actions {
     display: flex;
-    gap: 10px;
-    justify-content: center;
-    flex-wrap: wrap;
+    gap: 8px;
 }
 
-.dialog-actions .btn {
-    flex: 0 0 auto;
-    min-width: 120px;
-    padding: 10px 16px;
+.challenge-actions .btn {
+    flex: 1;
+    padding: 8px 10px;
+}
+
+@media (max-width: 600px) {
+    .challenge-card {
+        right: 10px;
+        left: 10px;
+        width: auto;
+        top: 66px;
+    }
 }
 
 .btn-ghost {
@@ -113,4 +125,41 @@
         opacity: 1;
         transform: translate(-50%, 0);
     }
+}
+
+/* ------------------------- панель подбора -------------------------
+
+   Пока идёт перебор игроков, виден прогресс: без него десять секунд на
+   каждого выглядят как зависание, и человек решает, что игра сломалась. */
+
+.search-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background: var(--container-bg);
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    animation: search-in 0.2s ease;
+}
+
+@keyframes search-in {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.search-text {
+    font-size: 0.88em;
+    color: var(--text-muted);
+    flex: 1 1 240px;
+    min-width: 0;
 }

@@ -1,7 +1,7 @@
 /**
- * Интеграционная проверка сетевого матча между двумя людьми.
- * Полный цикл: вызов -> принятие -> угадайка -> роли -> ходы -> очки ->
- * финал -> реванш. Проверяем главное: оба сокета видят одинаковое состояние.
+ * Интеграционная проверка сетевой партии между двумя людьми.
+ * Полный цикл: подбор соперника -> вызов -> принятие -> ходы -> финал ->
+ * реванш. Проверяем главное: оба сокета видят одинаковое состояние.
  *
  * Запуск: node test-online.js   (сервер должен быть запущен на :3000)
  */
@@ -9,11 +9,22 @@
 const { io } = require('socket.io-client');
 
 // SERVER_URL позволяет прогнать тот же сценарий против прода:
-//   $env:SERVER_URL='https://mypoddomenjm.mooo.com'; node test-online.js
+//   $env:SERVER_URL='https://example.com'; node test-online.js
 const URL = process.env.SERVER_URL || 'http://localhost:3000';
 const A = 'oa' + Math.floor(Math.random() * 100000);
 const B = 'ob' + Math.floor(Math.random() * 100000);
 const PASSWORD = 'pass1234';
+/**
+ * Сколько ждём вызов.
+ *
+ * Окно ответа на вызов - 10 секунд, и подбор перебирает игроков по очереди.
+ * На сервере почти всегда есть кто-то ещё онлайн, и вызов может уйти не
+ * сразу на нашего второго игрока: 10 секунд уйдёт на постороннего.
+ * Поэтому ждём с запасом на несколько таких окон, иначе тест падал бы
+ * от того, что рядом кто-то зашёл в игру.
+ */
+const WINDOW_MS = 10000;
+const ACCEPT_WAIT_MS = WINDOW_MS * 4 + 5000;
 
 let failed = 0;
 function check(name, ok, info) {
@@ -26,263 +37,231 @@ function check(name, ok, info) {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/** Снимок в сравнимом виде: всё, что должно совпадать у обоих игроков. */
-function shape(s) {
-    if (!s) return null;
-    return JSON.stringify({
-        roomId: s.roomId,
-        phase: s.phase,
-        round: s.round,
-        board: s.board,
-        scores: s.players.map(p => `${p.username}:${p.score}:${p.mark}:${p.isAttacker}`),
-        currentMark: s.currentMark,
-        result: s.result || null
-    });
-}
-
-function makeClient(username) {
-    const sock = io(URL, { transports: ['websocket'] });
-    const state = {
-        username,
-        token: null,
-        socket: sock,
-        snapshot: null,
-        lastMessage: null,
-        challenge: null,
-        rematchFrom: null,
-        online: null,
-        // захват первого снимка после запроса capture
-        capture: false,
-        captured: null,
-        // состояние для сравнения сокета с соперником
-        diff: null,
-        error: null
-    };
-
-    sock.on('connect_error', e => { state.error = 'connect_error: ' + e.message; });
-
-    sock.on('onlineUsersUpdate', data => { state.online = data.online; });
-
-    sock.on('challengeReceived', data => { state.challenge = data; });
-
-    sock.on('rematchRequested', data => { state.rematchFrom = data.from; });
-
-    sock.on('rematchDeclined', data => { state.rematchDeclined = data.by; });
-
-    sock.on('match:state', msg => {
-        state.snapshot = msg.snapshot;
-        state.lastMessage = msg;
-        // Первый снимок после запроса capture: тест играет мгновенно, и к
-        // моменту проверки матч уже успевает уйти вперёд
-        if (state.capture) {
-            state.captured = shape(msg.snapshot);
-            state.capture = false;
-        }
-        act(state);
-    });
-
-    return state;
-}
-
-/**
- * Играет за клиента: выбирает число, берёт роль атакующего и ходит.
- * Стратегия: атакующий берёт 0,1,2 - это даёт победу за 3 хода,
- * поэтому матч заканчивается быстро и детерминированно.
- */
-function act(state) {
-    const s = state.snapshot;
-    if (!s) return;
-    const me = s.players.find(p => p.id === state.username);
-    if (!me) return;
-
-    if (s.phase === 'guessing' && s.guessing?.sub === 'picking' && me.pick === null) {
-        const taken = s.players.map(p => p.pick).filter(v => v !== null);
-        const free = [0, 1, 2, 3, 4, 5, 6, 7, 8].find(i => !taken.includes(i));
-        if (free !== undefined) state.socket.emit('match:pick', { roomId: s.roomId, cell: free });
-        return;
-    }
-
-    if (s.phase === 'roleChoice' && s.guessing?.winnerId === state.username) {
-        state.socket.emit('match:role', { roomId: s.roomId, attack: true });
-        return;
-    }
-
-    if (s.phase === 'playing' && s.currentMark === me.mark) {
-        // Защитник берёт последнюю свободную клетку и не мешает атакующему
-        const free = me.mark === 'X' ? firstFree(s) : lastFree(s);
-        if (free >= 0) state.socket.emit('match:move', { roomId: s.roomId, cell: free });
-    }
-}
-
-const firstFree = s => s.board.findIndex(c => c === '');
-const lastFree = s => s.board.reduce((acc, c, i) => (c === '' ? i : acc), -1);
-
 async function register(username) {
     const res = await fetch(`${URL}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password: PASSWORD })
-    }).then(r => r.json());
-    if (res.token) return res.token;
-    // Уже существует - логинимся
-    const login = await fetch(`${URL}/api/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password: PASSWORD })
-    }).then(r => r.json());
-    return login.token;
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(`регистрация ${username}: ${data.error || res.status}`);
+    return data.token;
 }
 
-const timer = setTimeout(() => {
-    console.log('\n  ТАЙМАУТ: сценарий не завершился за 60 секунд');
-    console.log('  alpha: ' + shape(a.snapshot));
-    console.log('  beta:  ' + shape(b.snapshot));
-    a.socket.close();
-    b.socket.close();
-    process.exit(1);
-}, 60000);
+async function connect(username, token) {
+    const socket = io(URL);
+    const state = { snap: null, search: null, challenge: null, notice: null };
+    socket.on('match:state', msg => { state.snap = msg.snapshot; });
+    socket.on('search:state', s => { state.search = s; });
+    socket.on('challengeReceived', c => { state.challenge = c; });
+    socket.on('challengeDeclined', d => { state.notice = d; });
+    socket.on('rematchRequested', r => { state.rematch = r; });
+    socket.on('rematchDeclined', d => { state.notice = d; });
 
-let a, b;
+    await new Promise((resolve, reject) => {
+        socket.on('connect', resolve);
+        socket.on('connect_error', reject);
+    });
+    socket.emit('userOnline', { username });
+    await sleep(300);
+    return { socket, state, token, username };
+}
 
-async function waitFor(fn, ms, label) {
-    const deadline = Date.now() + ms;
-    while (Date.now() < deadline) {
-        if (fn()) return true;
-        await sleep(50);
+/** Ждём условия. getter, а не значение: состояние живёт во внешнем объекте. */
+function waitFor(get, predicate, timeoutMs = 20000) {
+    return new Promise((resolve, reject) => {
+        const ok = () => { const v = get(); return v && predicate(v); };
+        if (ok()) return resolve(get());
+        const started = Date.now();
+        const t = setInterval(() => {
+            if (ok()) { clearInterval(t); resolve(get()); }
+            else if (Date.now() - started > timeoutMs) {
+                clearInterval(t);
+                reject(new Error('ожидание истекло'));
+            }
+        }, 50);
+    });
+}
+
+/** Играем партию до финала, по очереди. Ошибок не ждём: нас интересует,
+    что оба видят одно и то же и что партия завершается. */
+async function playOut(pa, pb) {
+    let moves = 0;
+    let mismatch = null;
+    const lastEdges = { [pa.username]: '', [pb.username]: '' };
+
+    while (pa.state.snap && pa.state.snap.phase === 'playing' && moves < 120) {
+        for (const p of [pa, pb]) {
+            const s = p.state.snap;
+            if (!s || s.phase !== 'playing') continue;
+            if (s.turnId !== p.username) continue;
+
+            const free = s.edges.map((v, i) => (v === -1 ? i : -1)).filter(i => i >= 0);
+            if (free.length === 0) continue;
+            p.socket.emit('match:move', { roomId: s.roomId, edge: free[0] });
+            lastEdges[p.username] = free[0].toString();
+            await sleep(90);
+        }
+
+        // Ключевая проверка: состояния двух игроков обязаны совпадать
+        const sa = pa.state.snap;
+        const sb = pb.state.snap;
+        if (sa && sb && !mismatch) {
+            if (sa.edges.join(',') !== sb.edges.join(',')) {
+                mismatch = `после ${moves} ходов поля разошлись`;
+            } else if (sa.turnId !== sb.turnId) {
+                mismatch = `после ${moves} ходов очередь разошлась`;
+            } else {
+                for (const pl of sa.players) {
+                    const other = sb.players.find(x => x.id === pl.id);
+                    if (other && other.score !== pl.score) {
+                        mismatch = `счёт ${pl.username}: ${pl.score} против ${other.score}`;
+                    }
+                }
+            }
+        }
+        moves++;
     }
-    check(label, false, 'не дождались');
-    return false;
+    return { moves, mismatch };
 }
 
 async function main() {
-    console.log(`\nСетевой матч: ${A} против ${B}`);
+    console.log('Подготовка двух игроков...');
+    const tokenA = await register(A);
+    const tokenB = await register(B);
+    const pa = await connect(A, tokenA);
+    const pb = await connect(B, tokenB);
 
-    a = makeClient(A);
-    b = makeClient(B);
-    await waitFor(() => a.snapshot === null && a.socket.connected && b.socket.connected, 8000,
-        'оба сокета подключены');
+    /* ---------- 1. Рейтинг закрыт до трёх партий ---------- */
+    console.log('\nГейт рейтинга:');
+    pa.socket.emit('match:find');
+    await sleep(600);
+    check(
+        'поиск не запускается без трёх партий',
+        pa.state.search && pa.state.search.status === 'done' &&
+            pa.state.search.reason === 'locked',
+        pa.state.search
+    );
 
-    a.token = await register(A);
-    b.token = await register(B);
-    a.socket.emit('userOnline', { username: A });
-    b.socket.emit('userOnline', { username: B });
-
-    // --- список онлайна ---
-    await waitFor(() => a.online && b.online, 5000, 'список онлайна получен');
-    check('alpha видит бета в онлайне',
-        a.online.some(u => u.username === B), a.online);
-    check('beta видит alpha в онлайне',
-        b.online.some(u => u.username === A), b.online);
-    check('у игроков есть рейтинг',
-        a.online.every(u => typeof u.rating === 'number'));
-    check('никто не в матче', a.online.every(u => !u.inMatch), a.online);
-
-    // --- вызов ---
-    const sent = await fetch(`${URL}/api/challenge/send`, {
+    /* ---------- 2. Ручной вызов тоже закрыт ---------- */
+    const chk = await fetch(`${URL}/api/challenge/send`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${a.token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({ targetUsername: B })
+    });
+    check('вызов на рейтинг отклонён до трёх партий', chk.status === 400, chk.status);
+
+    /* ---------- 3. Набираем три партии ботом ---------- */
+    console.log('\nГейт набирается партиями с ботом:');
+    for (let i = 1; i <= 3; i++) {
+        pa.state.snap = null;
+        pa.socket.emit('match:startBot');
+        await waitFor(() => pa.state.snap, s => s.phase === 'playing');
+        // Быстро доигрываем: ходим всегда, пока партия жива
+        const guard = Date.now() + 60000;
+        while (pa.state.snap.phase === 'playing' && Date.now() < guard) {
+            const s = pa.state.snap;
+            if (s.turnId !== pa.username) { await sleep(60); continue; }
+            const free = s.edges.map((v, x) => (v === -1 ? x : -1)).filter(x => x >= 0);
+            if (!free.length) break;
+            pa.socket.emit('match:move', { roomId: s.roomId, edge: free[0] });
+            await sleep(80);
+        }
+        check(`партия с ботом ${i} доиграна`, pa.state.snap.phase === 'finished',
+            pa.state.snap.phase);
+        pa.state.snap = null;
+    }
+
+    const profA = await fetch(`${URL}/api/profile`, {
+        headers: { Authorization: `Bearer ${tokenA}` }
     }).then(r => r.json());
-    check('вызов принят сервером', sent.success === true, sent);
+    check('после трёх партий рейтинг открыт', profA.canPlayRated === true, profA);
+    check('рейтинг не сдвинулся от игр с ботом', profA.rating === 1000, profA.rating);
 
-    await waitFor(() => b.challenge, 5000, 'beta получил вызов');
-    check('в вызове указан alpha', b.challenge && b.challenge.from === A, b.challenge);
+    /* ---------- 4. Подбор: B принимает вызов A ---------- */
+    console.log('\nПодбор соперника:');
+    pa.socket.emit('match:find');
+    const incoming = await waitFor(() => pb.state.challenge, c => !!c, ACCEPT_WAIT_MS);
+    check('B получил вызов', !!incoming, incoming);
+    check('в вызове указан отправитель', incoming.from === A, incoming.from);
+    check('окно ответа объявлено', typeof incoming.expiresIn === 'number', incoming);
 
-    // --- принятие запускает матч у обоих ---
-    const accepted = await fetch(`${URL}/api/challenge/accept`, {
+    const acc = await fetch(`${URL}/api/challenge/accept`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${b.token}` },
-        body: JSON.stringify({ challengeId: b.challenge.challengeId })
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokenB}` },
+        body: JSON.stringify({ challengeId: incoming.challengeId })
+    });
+    check('вызов принят', acc.ok, acc.status);
+    pb.state.challenge = null;
+
+    await waitFor(() => pa.state.snap, s => s && s.phase === 'playing');
+    await waitFor(() => pb.state.snap, s => s && s.phase === 'playing');
+    check('оба игрока в одной партии',
+        pa.state.snap.roomId === pb.state.snap.roomId,
+        [pa.state.snap.roomId, pb.state.snap.roomId]);
+    check('у обоих одинаковое поле',
+        pa.state.snap.edges.join() === pb.state.snap.edges.join());
+    check('поиск у A остановлен', pa.state.search.status === 'idle', pa.state.search);
+
+    /* ---------- 5. Играем партию ---------- */
+    console.log('\nСетевая партия:');
+    const ratedBefore = (await fetch(`${URL}/api/profile`, {
+        headers: { Authorization: `Bearer ${tokenA}` }
+    }).then(r => r.json())).rating;
+
+    const { moves, mismatch } = await playOut(pa, pb);
+    console.log(`  (ходов: ${moves})`);
+
+    check('оба сокета видели одинаковую партию', mismatch === null, mismatch);
+    check('партия дошла до финала',
+        pa.state.snap.phase === 'finished' && pb.state.snap.phase === 'finished',
+        [pa.state.snap.phase, pb.state.snap.phase]);
+    check('победитель один и тот же у обоих',
+        pa.state.snap.result.winnerId === pb.state.snap.result.winnerId,
+        [pa.state.snap.result.winnerId, pb.state.snap.result.winnerId]);
+    check('все 16 квадратов разобраны',
+        pa.state.snap.players.reduce((s, p) => s + p.score, 0) === 16,
+        pa.state.snap.players.map(p => p.score));
+
+    /* ---------- 6. Рейтинг двигается в сетевой игре ---------- */
+    const profA2 = await fetch(`${URL}/api/profile`, {
+        headers: { Authorization: `Bearer ${tokenA}` }
     }).then(r => r.json());
-    check('принятие вернуло roomId', !!accepted.roomId, accepted);
+    const profB2 = await fetch(`${URL}/api/profile`, {
+        headers: { Authorization: `Bearer ${tokenB}` }
+    }).then(r => r.json());
+    const ratedTotal = profA2.rating + profB2.rating;
+    check('рейтинг изменился у участников сетевой игры',
+        profA2.rating !== ratedBefore || profB2.rating !== 1000,
+        [ratedBefore, profA2.rating, profB2.rating]);
+    check('у обоих учтена партия', profA2.played >= 4 && profB2.played >= 1,
+        [profA2.played, profB2.played]);
 
-    await waitFor(() => a.snapshot && b.snapshot &&
-        a.snapshot.phase !== 'finished' && b.snapshot.phase !== 'finished', 8000,
-        'матч начался у обоих');
+    /* ---------- 7. Реванш ---------- */
+    console.log('\nРеванш:');
+    pa.socket.rematch = null;
+    pa.socket.emit('match:rematch');
+    await waitFor(() => pb.state.rematch, r => !!r);
+    check('B получил предложение реванша', pb.state.rematch.from === A, pb.state.rematch);
 
-    check('у обоих одна комната', a.snapshot.roomId === b.snapshot.roomId,
-        { a: a.snapshot.roomId, b: b.snapshot.roomId });
-    check('в матче двое людей',
-        a.snapshot.players.length === 2 && a.snapshot.players.every(p => !p.isBot),
-        a.snapshot.players);
-    check('сокеты видят одинаковое состояние', shape(a.snapshot) === shape(b.snapshot),
-        { a: shape(a.snapshot), b: shape(b.snapshot) });
+    pb.socket.emit('match:rematchResponse', { from: A, accept: true });
+    await waitFor(() => pa.state.snap, s => s && s.phase === 'playing');
+    await waitFor(() => pb.state.snap, s => s && s.phase === 'playing');
+    check('реванш начался', pa.state.snap.roomId !== pb.state.snap.roomId ||
+        pa.state.snap.phase === 'playing');
+    check('поле реванша пустое',
+        pa.state.snap.edges.every(v => v === -1));
 
-    // --- матч доигрывается сам ---
-    const done = await waitFor(() =>
-        a.snapshot?.phase === 'finished' && b.snapshot?.phase === 'finished', 40000,
-        'матч доигран до финала');
-    if (!done) { cleanup(); return; }
-
-    check('оба видят один результат', shape(a.snapshot) === shape(b.snapshot),
-        { a: shape(a.snapshot), b: shape(b.snapshot) });
-    check('победитель определён', !!a.snapshot.result?.winnerId ||
-        a.snapshot.result?.type === 'cancelled', a.snapshot.result);
-    check('у кого-то 5 очков',
-        Math.max(...a.snapshot.players.map(p => p.score)) >= 5,
-        a.snapshot.players.map(p => p.username + '=' + p.score));
-    check('очки совпадают у обоих',
-        a.snapshot.players.map(p => p.score).join() ===
-        b.snapshot.players.map(p => p.score).join());
-
-    console.log('  счёт: ' + a.snapshot.players.map(p => `${p.username}=${p.score}`).join('  '));
-    console.log('  результат: ' + JSON.stringify(a.snapshot.result));
-
-    // --- после финала игроки свободны для вызова ---
-    await waitFor(() => a.online && a.online.every(u => !u.inMatch), 5000,
-        'после финала оба свободны');
-
-    // --- реванш ---
-    const oldRoom = a.snapshot.roomId;
-    a.socket.emit('match:rematch');
-    await waitFor(() => b.rematchFrom, 5000, 'beta получил предложение реванша');
-    check('реванш предложен от alpha', b.rematchFrom === A, b.rematchFrom);
-
-    // --- отказ от реванша: проверяем ДО успешного, иначе новый матч
-    //     успевает доиграться и запрос уйдёт уже не туда
-    b.socket.emit('match:rematch');
-    await waitFor(() => a.rematchFrom, 5000, 'alpha получил запрос реванша');
-    a.socket.emit('match:rematchResponse', { from: B, accept: false });
-    await waitFor(() => b.rematchDeclined, 5000, 'beta получил отказ');
-    check('отказ дошёл до инициатора', b.rematchDeclined === A, b.rematchDeclined);
-    check('после отказа матч не изменился',
-        a.snapshot.roomId === oldRoom && b.snapshot.roomId === oldRoom,
-        { a: a.snapshot.roomId, b: b.snapshot.roomId });
-
-    // --- принятый реванш ---
-    a.socket.emit('match:rematch');
-    await waitFor(() => b.rematchFrom && b.rematchFrom === A, 5000,
-        'beta получил предложение реванша');
-
-    // Ловим именно первый снимок нового матча: дальше тест играет мгновенно
-    a.capture = true;
-    b.capture = true;
-    b.socket.emit('match:rematchResponse', { from: A, accept: true });
-    await waitFor(() => a.captured && b.captured, 8000, 'новый матч начался');
-
-    const A0 = JSON.parse(a.captured);
-    const B0 = JSON.parse(b.captured);
-    check('реванш создал новую комнату', A0.roomId !== oldRoom, { old: oldRoom, now: A0.roomId });
-    check('после реванша сокеты синхронны', a.captured === b.captured,
-        { a: a.captured, b: b.captured });
-    check('после реванша счёт обнулён', A0.scores.every(s => s.split(':')[1] === '0'), A0.scores);
-    check('после реванша раунд 1 и угадайка',
-        A0.round === 1 && A0.phase === 'guessing', { round: A0.round, phase: A0.phase });
-    check('доска чистая', A0.board.every(c => c === ''), A0.board);
-
-    console.log(failed === 0 ? '\nСетевой матч пройден\n' : `\nПровалено: ${failed}\n`);
-    cleanup(failed === 0 ? 0 : 1);
+    pa.socket.close();
+    pb.socket.close();
 }
 
-function cleanup(code) {
-    clearTimeout(timer);
-    if (a) a.socket.close();
-    if (b) b.socket.close();
-    process.exit(code);
-}
-
-main().catch(e => {
-    console.log('\n  FAIL исключение: ' + e.message);
-    console.log(e.stack);
-    cleanup(1);
-});
+main()
+    .then(() => {
+        console.log(failed === 0 ? '\nВсе проверки пройдены' : `\nПровалено: ${failed}`);
+        process.exit(failed === 0 ? 0 : 1);
+    })
+    .catch(e => {
+        console.error('\nОшибка теста:', e.message);
+        process.exit(1);
+    });

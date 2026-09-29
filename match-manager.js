@@ -4,10 +4,12 @@
  * Идентификатор игрока внутри матча - ник, а не socket.id: при обрыве связи
  * socket.id меняется, и матч перестал бы узнавать, кто вернулся.
  *
- * Страйки живут между матчами (userStrikes): три нарушения суммарно
- * (таймаут хода + обрыв связи) -> в следующем матче первое нарушение
- * даёт автопроигрыш с рейтинговым штрафом. Сбрасываются после матча,
- * в котором игрок не нарушил ничего.
+ * Страйки живут между матчами (userStrikes): три обрыва связи суммарно ->
+ * в следующем матче следующий обрыв даёт автопроигрыш с рейтинговым
+ * штрафом. Сбрасываются после матча, в котором игрок не нарушил ничего.
+ * Пропуск хода по таймеру страйком НЕ считается: в партии сорок ходов
+ * четвёртое «нарушение» наказало бы новичка за обычное размышление, и в
+ * движке вместо этого рисуется случайная линия.
  */
 
 const { Match, STRIKE_LIMIT } = require('./match');
@@ -67,8 +69,8 @@ class MatchManager {
             onState: (rid, snapshot, type, extra) => {
                 this.broadcast(rid, snapshot, type, extra);
                 // Бота нужно двигать при ЛЮБОМ изменении состояния, а не только
-                // после внешнего действия клиента: переходы между раундами 2..8
-                // происходят внутри движка и менеджер их не видит.
+                // после внешнего действия клиента: смена хода происходит внутри
+                // движка, и менеджер её не видит.
                 const live = this.matches.get(rid);
                 if (live) this.maybeBotMove(live);
             },
@@ -111,24 +113,10 @@ class MatchManager {
 
     /* ------------------------------ действия ------------------------------ */
 
-    pick(roomId, username, cell) {
+    move(roomId, username, edge) {
         const m = this.matches.get(roomId);
         if (!m) return;
-        m.pickCell(username, cell);
-        this.maybeBotGuess(m);
-    }
-
-    chooseRole(roomId, username, attack) {
-        const m = this.matches.get(roomId);
-        if (!m) return;
-        m.chooseRole(username, !!attack);
-        this.maybeBotMove(m);
-    }
-
-    move(roomId, username, cell) {
-        const m = this.matches.get(roomId);
-        if (!m) return;
-        m.move(username, cell);
+        m.move(username, edge);
         this.maybeBotMove(m);
     }
 
@@ -138,28 +126,21 @@ class MatchManager {
         return match.players.find(p => p.isBot) || null;
     }
 
-    // Бот выбирает число мгновенно, чтобы человек не ждал.
-    maybeBotGuess(match) {
-        if (match.phase !== 'guessing' || match.guessSub !== 'picking') return;
-        const bot = this.botOf(match);
-        if (!bot || match.picks.has(bot.id)) return;
-        match.pickCell(bot.id, match.randomFreeCell());
-    }
-
     // Ход бота с небольшой задержкой, чтобы выглядел естественно.
     maybeBotMove(match) {
         if (match.phase !== 'playing') return;
         const bot = this.botOf(match);
         if (!bot) return;
-        if (bot.mark !== match.currentMark) return;
+        if (bot.slot !== match.turnSlot) return;
         if (this.botTimers.has(match.roomId)) return;
 
         const timer = setTimeout(() => {
             this.botTimers.delete(match.roomId);
             if (match.phase !== 'playing') return;
-            if (bot.mark !== match.currentMark) return;
-            const cell = botMove(match.board, bot.mark);
-            if (cell >= 0) match.move(bot.id, cell);
+            const botNow = this.botOf(match);
+            if (!botNow || botNow.slot !== match.turnSlot) return;
+            const edge = botMove(match.edges, match.boxOwner, botNow.slot);
+            if (edge >= 0) match.move(botNow.id, edge);
         }, BOT_THINK_MS);
         this.botTimers.set(match.roomId, timer);
     }
@@ -169,7 +150,7 @@ class MatchManager {
     broadcast(roomId, snapshot, type, extra) {
         // Финал разбираем ДО рассылки: хук onResult пересчитывает рейтинг,
         // и клиенту нужны дельты в том же сообщении. Иначе экран итогов
-        // показывал бы счёт раундов, но не изменение рейтинга.
+        // показывал бы счёт, но не изменение рейтинга.
         if (type === 'finish') this.onFinish(roomId, snapshot);
 
         this.io.to(roomId).emit('match:state', {
@@ -182,7 +163,7 @@ class MatchManager {
     /**
      * Дополняет снимок данными, которых нет в движке матча: рейтингом и
      * числом страйков. Рейтинг нужен, чтобы объяснить игроку, почему за
-     * победу дали не два очка, а три; страйки - чтобы наказание за
+     * эту победу дали не два очка, а три; страйки - чтобы наказание за
      * четвёртое нарушение не выглядело капризом сервера.
      */
     decorate(roomId, snapshot) {
@@ -213,7 +194,7 @@ class MatchManager {
         if (snapshot.result && snapshot.result.type === 'finished' && this.hooks.onResult) {
             const winner = players.find(p => p.id === snapshot.result.winnerId);
             const loser = players.find(p => p.id !== snapshot.result.winnerId);
-            // Хук возвращает дельты, чтобыdecorate() показал их игроку
+            // Хук возвращает дельты, чтобы decorate() показал их игроку
             this.ratingDeltas.set(roomId, this.hooks.onResult(winner, loser, snapshot.result) || null);
         }
 
@@ -282,4 +263,4 @@ class MatchManager {
     }
 }
 
-module.exports = { MatchManager, newRoomId };
+module.exports = { MatchManager, newRoomId, BOT_RATING };
