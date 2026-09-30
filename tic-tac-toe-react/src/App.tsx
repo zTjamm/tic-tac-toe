@@ -137,7 +137,7 @@ const App: React.FC = () => {
     }
 
     return (
-        <div className={`app ${showGame ? 'with-game' : ''} ${panelOpen ? 'panel-is-open' : ''}`}>
+        <div className={`app ${showGame ? 'with-game' : ''}`}>
             {/* Панель и поиск в одном header: игровой экран сделан сеткой, и
                 шапка должна занимать ровно одну строку. Иначе при появлении
                 панели поиска число строк меняется и вёрстка прыгает */}
