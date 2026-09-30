@@ -7,6 +7,7 @@ const fs = require('fs');
 const cors = require('cors');
 const { MatchManager, BOT_RATING } = require('./match-manager');
 const { matchDeltas } = require('./rating');
+const store = require('./user-store');
 
 const app = express();
 const server = http.createServer(app);
@@ -43,7 +44,6 @@ app.use((req, res, next) => {
     next();
 });
 
-const USERS_FILE = path.join(__dirname, 'users.json');
 const users = new Map();
 const sessions = new Map();
 const onlineUsers = new Map();
@@ -63,36 +63,39 @@ const RATED_UNLOCK_GAMES = 3;
 const CHALLENGE_WINDOW_MS = 10000;
 
 function loadUsers() {
-    try {
-        if (fs.existsSync(USERS_FILE)) {
-            const data = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-            for (const [username, userData] of Object.entries(data)) {
-                // played появился вместе с «точками и квадратами»;
-                // у старых аккаунтов поля нет, и без него гейт не откроется
-                if (typeof userData.played !== 'number') userData.played = 0;
-                users.set(username, userData);
-                if (userData.friends) {
-                    friends.set(username, new Set(userData.friends));
-                }
-            }
-        }
-    } catch (e) {
-        console.error('Ошибка загрузки пользователей:', e);
+    // На томе файла ещё нет - переселяем его из сборки, чтобы при первом
+    // деплое аккаунты не начались с нуля
+    if (store.seedIfMissing()) {
+        console.log('[Store] данные перенесены из сборки в', store.storePath());
     }
+
+    const data = store.read();
+    for (const [username, userData] of Object.entries(data)) {
+        // played появился вместе с «точками и квадратами»; у старых
+        // аккаунтов поля нет, и без него гейт на рейтинг не откроется
+        if (typeof userData.played !== 'number') userData.played = 0;
+        users.set(username, userData);
+        if (userData.friends) {
+            friends.set(username, new Set(userData.friends));
+        }
+    }
+    console.log(`[Store] загружено аккаунтов: ${users.size} (${store.storePath()})`);
 }
 
 function saveUsers() {
+    const data = {};
+    for (const [username, userData] of users) {
+        data[username] = {
+            ...userData,
+            friends: friends.has(username) ? Array.from(friends.get(username)) : []
+        };
+    }
     try {
-        const data = {};
-        for (const [username, userData] of users) {
-            data[username] = {
-                ...userData,
-                friends: friends.has(username) ? Array.from(friends.get(username)) : []
-            };
-        }
-        fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
+        store.write(data);
     } catch (e) {
-        console.error('Ошибка сохранения пользователей:', e);
+        // Не роняем партию из-за записи: потеря одного результата лучше,
+        // чем упавший сервер
+        console.error('Ошибка сохранения пользователей:', e.message);
     }
 }
 
