@@ -243,5 +243,34 @@ function sidesOf(edge) {
     return [{ r1: r, c1: c }, { r1: r + 1, c1: c }];
 }
 
+/* ----------------------------------------------------------------------
+   Раскладка не должна зависеть от длины текста.
+
+   Та же ошибка, что и с viewBox, только по горизонтали: длинный текст с
+   nowrap распирал .container, и доска прыгала вправо. Проверяем, что
+   правило на месте, - в собранном CSS, а не в исходнике, потому что
+   страницу раздаёт именно он. */
+(function checkContainerMinWidth() {
+    const src = fs.readFileSync(path.join(REACT, 'src', 'App.css'), 'utf8');
+    const rule = /\.container\s*\{[^}]*\}/.exec(src);
+    check('у .container задан min-width: 0', !!rule && /min-width:\s*0/.test(rule[0]),
+        rule ? rule[0].slice(0, 120) : 'правило не найдено');
+
+    const distIndex = path.join(REACT, 'dist', 'index.html');
+    if (fs.existsSync(distIndex)) {
+        const href = (/href="\/assets\/([^"]+\.css)"/.exec(fs.readFileSync(distIndex, 'utf8')) || [])[1];
+        const cssPath = href && path.join(REACT, 'dist', 'assets', href);
+        if (cssPath && fs.existsSync(cssPath)) {
+            const minified = new RegExp('\\.container\\{[^}]*min-width:0').test(
+                fs.readFileSync(cssPath, 'utf8'));
+            check('min-width: 0 доехал до собранного CSS', minified, href);
+        } else {
+            check('собранный CSS на месте', false, href || 'ссылка не найдена');
+        }
+    } else {
+        check('собранный CSS на месте', false, 'dist/index.html отсутствует - выполните npm run build');
+    }
+})();
+
 console.log(failed === 0 ? '\nГеометрия клиента и сервера совпадает' : `\nПровалено: ${failed}`);
 process.exit(failed === 0 ? 0 : 1);
