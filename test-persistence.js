@@ -78,9 +78,17 @@ async function main() {
     console.log('\nПервый запуск:');
     let server = startServer(dataDir);
     check('сервер поднялся', await waitUp());
+    /* Посев: на пустом томе файл берётся из сборки. Проверяем, что он
+       РОВНО скопирован, а не пустой: на сервере в сборке лежат настоящие
+       аккаунты, и ожидание «пусто» там падало бы, хотя всё работает */
+    const bundled = path.join(ROOT, 'users.json');
+    const bundledData = fs.existsSync(bundled) ? JSON.parse(fs.readFileSync(bundled, 'utf8')) : {};
     const seeded = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
     check('посев создал файл на томе', seeded !== null);
-    check('в посеянном файле пока нет игроков', seeded !== null && Object.keys(seeded).length === 0, seeded && Object.keys(seeded));
+    check('посев скопировал файл из сборки целиком',
+        seeded !== null && Object.keys(seeded).length === Object.keys(bundledData).length &&
+        Object.keys(bundledData).every(k => seeded[k] !== undefined),
+        { изСборки: Object.keys(bundledData).length, наТоме: seeded && Object.keys(seeded).length });
 
     const reg = await api('/api/register', {
         method: 'POST',
