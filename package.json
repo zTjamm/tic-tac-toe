@@ -11,6 +11,8 @@
     "test:matchmaking": "node test-matchmaking.js",
     "test:integration": "node test-integration.js",
     "test:timers": "node test-timers.js",
+    "test:prod": "node tools/prod-smoke.js",
+    "clean:test-accounts": "node tools/clean-test-accounts.js",
     "build": "cd tic-tac-toe-react && npm run build"
   },
   "keywords": [

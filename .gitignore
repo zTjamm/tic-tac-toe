@@ -15,3 +15,6 @@ node_modules/
 
 # User data
 users.json
+
+# Список тестовых аккаунтов, созданных tools/prod-smoke.js
+tools/.sm-accounts
