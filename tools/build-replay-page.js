@@ -286,12 +286,12 @@ const A = players[0], B = players[1];
 const NS = 'http://www.w3.org/2000/svg';
 const el = id => document.getElementById(id);
 
-/* Кто ходил этим ходом. Если право ходить осталось за ним, значит ходящий -
-   тот, чей теперь turnId. Иначе ход перешёл, и ходил соперник. */
+/* Кто ходил этим ходом. В записи он проставлен явно (moverId): выводить
+   его из turnId нельзя - после хода без продолжения очередь переходит, и
+   такой вывод приписал бы все ходы одному и тому же игроку. */
 function moverOf(f) {
-  const next = f.turnId === A.id ? A : B;
-  const other = f.turnId === A.id ? B : A;
-  return f.keptTurn ? next : other;
+    if (!f || !f.moverId) return f && f.turnId === A.id ? A : B;
+    return f.moverId === A.id ? A : B;
 }
 
 /* Моменты для списка и меток на ленте.
@@ -419,8 +419,8 @@ function draw() {
         ? ' и ходит дальше &mdash; <b>продолжение</b>.'
         : ', ход переходит сопернику.');
   } else if (danger) {
-    h.innerHTML = '<span class="warn">Осторожно:</span> <b>' + esc(who.username) +
-      '</b> придётся отдать ' + plural(danger) + '. Красная рамка.';
+    h.innerHTML = '<b>' + esc(moverOf(f).username) + '</b> собрал(а) цепочку: ' +
+      '<span class="warn">' + esc(who.username) + ' придётся отдать ' + plural(danger) + '</span>.';
   } else {
     h.innerHTML = 'Ходит <b>' + esc(who.username) + '</b>. Осталось линий: ' + f.movesLeft + '.';
   }
@@ -459,8 +459,12 @@ function buildMoments() {
       txt = '<b>' + esc(m.who.username) + '</b> взял(а) ' + plural(m.gain) +
         (m.kept ? ' и ходит дальше' : '');
     } else {
+      // Опасные квадраты относятся к тому, чей ход СЛЕДУЮЩИЙ: цепочку
+      // собрал ходивший, а отдавать придётся его сопернику
+      const next = f.turnId === A.id ? A : B;
       ico = '⚠️';
-      txt = '<b>' + esc(m.who.username) + '</b> отдаёт ' + plural(m.danger);
+      txt = '<b>' + esc(m.who.username) + '</b> собрал(а) цепочку — <b>' +
+        esc(next.username) + '</b> отдаёт ' + plural(m.danger);
     }
     li.innerHTML = '<span class="ico">' + ico + '</span><span class="txt">' + txt + '</span>';
     const mo = document.createElement('div');

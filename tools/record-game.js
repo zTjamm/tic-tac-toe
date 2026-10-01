@@ -103,38 +103,48 @@ async function playOne(tag) {
 
     const frames = [];
     let guard = 0, prevCount = -1, room = null;
-    let lastPhase = null;
     const timing = [];
+
+    /**
+     * Кадр = состояние после хода плюс сведения о самом ходе.
+     *
+     * Всё в одном месте, потому что дважды делать это нельзя: когда ход
+     * замыкает партию, снимок приходит уже с фазой finished и до счётчика
+     * линий дело не доходит. Отдельная ветка для финала теряла метаданные,
+     * и последний ход оставался без автора.
+     */
+    const pushFrame = s => {
+        const prev = frames[frames.length - 1];
+        // Ходил тот, чей ход был ДО снимка
+        const moverId = prev ? prev.turnId : s.turnId;
+        // Право ходить осталось за ходившим тогда и только тогда, когда
+        // turnId не сменился: иначе ход перешёл сопернику
+        const kept = !!prev && s.turnId === prev.turnId;
+        frames.push(slim(s, {
+            move: frames.length,
+            moverId,
+            gainedBoxes: (s.lastGainedBoxes || []).slice(),
+            // Опасные квадраты, которые ходивший видел перед ходом
+            dangerAtMove: (prev ? prev.danger : s.danger || []).slice(),
+            keptTurn: kept
+        }));
+    };
 
     while (guard++ < 900) {
         const s = state.snap;
         if (!s) { await sleep(90); continue; }
         if (!room && s.roomId) { room = s.roomId; }
         if (!room) { await sleep(90); continue; }
-        if (s.phase === 'finished') {
-            frames.push(slim(s, { move: frames.length }));
-            break;
-        }
+        if (s.phase === 'finished') { pushFrame(s); break; }
         const count = s.edges.filter(v => v !== -1).length;
         if (count === prevCount) { await sleep(90); continue; }
 
-        // Вот прирост - это ход, который мы только что отправили.
-        // lastGainedBoxes и turnId позволяют понять, было ли право ходить дальше
-        if (frames.length) {
-            const prev = frames[frames.length - 1];
-            const gained = (s.lastGainedBoxes || []).length;
-            const mine = s.turnId === me.username;
-            frames[frames.length - 1] = {
-                ...prev,
-                gainedBoxes: (s.lastGainedBoxes || []).slice(),
-                dangerAtMove: (prev.danger || []).slice(),
-                keptTurn: !!gained && mine,
-                endedWith: mine ? 'player' : 'bot'
-            };
-        }
-        frames.push(slim(s, { move: frames.length }));
+        // Снимок s - это состояние ПОСЛЕ хода, значит именно он и есть
+        // кадр, на котором ход виден. Раньше результат хода крепился к
+        // предыдущему кадру, и подпись «взял квадрат» появлялась на поле,
+        // где квадрат ещё не был залит.
+        pushFrame(s);
         prevCount = count;
-        lastPhase = s.phase;
 
         if (s.phase === 'playing' && s.turnId === me.username) {
             const e = chooseEdge(s);
