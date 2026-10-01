@@ -362,6 +362,14 @@ const SidePanel: React.FC<SidePanelProps> = ({
                                 <p className="side-hint leaderboard-note">
                                     Ничьих в матче не бывает, поэтому в счёте их нет.
                                 </p>
+                                <a
+                                    className="side-link"
+                                    href="/analysis.html"
+                                    target="_blank"
+                                    rel="noreferrer"
+                                >
+                                    Разбор партии: ход за ходом
+                                </a>
                             </div>
                         )}
                     </div>

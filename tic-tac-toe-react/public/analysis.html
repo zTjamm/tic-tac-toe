@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Разбор партии - Точки и квадраты</title>
+<style>
+  :root {
+    --bg: #12121f;
+    --bg-soft: #1b1b2e;
+    --card: #20203a;
+    --line: #2e2e4d;
+    --text: #e8e8f4;
+    --muted: #9a9ab8;
+    --slot0: #6c8cff;
+    --slot1: #ff7a8a;
+    --danger: #ff5566;
+    --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(1100px 620px at 12% -8%, #2a2a52 0%, transparent 62%),
+      radial-gradient(900px 520px at 92% 4%, #33244a 0%, transparent 58%),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 34px 22px 60px; }
+
+  header.top { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px 26px; margin-bottom: 26px; }
+  h1 {
+    margin: 0; font-size: 30px; line-height: 1.15; font-weight: 700;
+    letter-spacing: .4px; text-transform: uppercase;
+  }
+  h1 span { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .sub { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+  .backlink {
+    margin-left: auto; color: var(--muted); text-decoration: none;
+    border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px; font-size: 13.5px;
+    transition: color .18s, border-color .18s, background .18s;
+  }
+  .backlink:hover { color: var(--text); border-color: var(--slot0); background: rgba(108,140,255,.1); }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 336px; gap: 24px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: linear-gradient(180deg, var(--card) 0%, var(--bg-soft) 100%);
+    border: 1px solid var(--line); border-radius: 20px; padding: 20px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.42);
+  }
+
+  /* ---------- табло счёта ---------- */
+  .scorebar { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+  .side-score { flex: 1; min-width: 0; }
+  .side-score .who {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: 14px; margin-bottom: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .side-score .nm { overflow: hidden; text-overflow: ellipsis; }
+  .side-score .pts { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 17px; }
+  .side-score .tag {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px;
+  }
+  .track { height: 7px; border-radius: 99px; background: rgba(255,255,255,.07); overflow: hidden; }
+  .fill { height: 100%; border-radius: 99px; transition: width .45s cubic-bezier(.4,0,.2,1); }
+  .fill.a { background: linear-gradient(90deg, var(--slot0), #8fa4ff); }
+  .fill.b { background: linear-gradient(90deg, var(--slot1), #ffa2ad); }
+  .vs { font-size: 12px; color: var(--muted); letter-spacing: 1px; }
+
+  /* ---------- поле ---------- */
+  .boardbox { display: flex; justify-content: center; }
+  svg.board { width: 100%; max-width: 520px; height: auto; display: block; }
+  .dot { fill: #4b4b74; }
+  .line { stroke-width: 5.5; stroke-linecap: round; fill: none; }
+  .line.s0 { stroke: var(--slot0); }
+  .line.s1 { stroke: var(--slot1); }
+  .line.latest { stroke: #fff; filter: drop-shadow(0 0 7px rgba(255,255,255,.85)); }
+  .bfill.s0 { fill: rgba(108,140,255,.34); }
+  .bfill.s1 { fill: rgba(255,122,138,.34); }
+  .bfill { animation: pop .42s cubic-bezier(.2,1.4,.4,1); }
+  @keyframes pop { 0% { transform: scale(.55); opacity: .2; } 60% { transform: scale(1.09); } 100% { transform: scale(1); opacity: 1; } }
+  .danger { fill: none; stroke: var(--danger); stroke-width: 2.4; stroke-dasharray: 7 5; animation: march 1.1s linear infinite; }
+  @keyframes march { to { stroke-dashoffset: -24; } }
+
+  /* ---------- лента ходов ---------- */
+  .hint { text-align: center; color: var(--muted); font-size: 13.5px; margin: 14px 0 0; min-height: 20px; }
+  .hint b { color: var(--text); font-weight: 600; }
+  .hint .warn { color: var(--danger); }
+
+  .scrub { margin-top: 16px; }
+  .rail {
+    position: relative; height: 30px; border-radius: 10px; background: rgba(255,255,255,.05);
+    border: 1px solid var(--line); cursor: pointer;
+  }
+  .rail .fillbar {
+    position: absolute; left: 0; top: 0; bottom: 0; border-radius: 9px;
+    background: linear-gradient(90deg, rgba(108,140,255,.5), rgba(108,140,255,.22));
+  }
+  .rail .knob {
+    position: absolute; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+    border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px rgba(108,140,255,.5);
+    transition: left .18s cubic-bezier(.4,0,.2,1);
+  }
+  .mark {
+    position: absolute; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px;
+    border-radius: 50%; pointer-events: auto; cursor: pointer;
+  }
+  .mark.gain { background: var(--ok); }
+  .mark.danger { background: var(--danger); }
+  .mark.chain {
+    background: conic-gradient(var(--ok) 0 50%, var(--danger) 0 100%);
+    box-shadow: 0 0 0 1.5px var(--bg-soft);
+  }
+  .mark:hover { transform: scale(1.5); }
+
+  .controls { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .controls button {
+    background: rgba(255,255,255,.06); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 14px; font: inherit; font-size: 13.5px; cursor: pointer;
+    transition: background .15s, border-color .15s, transform .08s;
+  }
+  .controls button:hover { background: rgba(255,255,255,.1); border-color: #45456e; }
+  .controls button:active { transform: translateY(1px); }
+  .controls .primary { background: var(--slot0); border-color: var(--slot0); color: #fff; min-width: 92px; font-weight: 600; }
+  .controls .primary:hover { background: #7d99ff; }
+  .spacer { flex: 1; }
+  .stepno { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+  .speed { display: flex; gap: 4px; }
+  .speed button { padding: 8px 10px; font-size: 12.5px; }
+  .speed button.on { background: rgba(108,140,255,.22); border-color: var(--slot0); color: #cdd8ff; }
+
+  /* ---------- ключевые моменты ---------- */
+  .side h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1.1px; color: var(--muted);
+    margin: 0 0 12px; font-weight: 600;
+  }
+  .moments { list-style: none; margin: 0; padding: 0; max-height: 430px; overflow-y: auto; }
+  .moments li {
+    display: flex; gap: 10px; align-items: flex-start; padding: 9px 10px; border-radius: 11px;
+    cursor: pointer; border: 1px solid transparent; transition: background .15s, border-color .15s;
+  }
+  .moments li:hover { background: rgba(255,255,255,.05); }
+  .moments li.on { background: rgba(108,140,255,.14); border-color: rgba(108,140,255,.45); }
+  .moments .ico { font-size: 14px; line-height: 1.4; }
+  .moments .txt { font-size: 13.2px; }
+  .moments .mo { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .moments .txt b { font-weight: 600; }
+  .empty { color: var(--muted); font-size: 13px; }
+
+  .legend { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .legend div { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 12.6px; margin-bottom: 7px; }
+  .sw { width: 22px; height: 4px; border-radius: 2px; flex: none; }
+  .sw.a { background: var(--slot0); }
+  .sw.b { background: var(--slot1); }
+  .sw.d { background: transparent; border-top: 2px dashed var(--danger); height: 0; }
+  .sw.l { background: #fff; box-shadow: 0 0 7px rgba(255,255,255,.8); }
+
+  .rules { margin-top: 18px; color: var(--muted); font-size: 13px; }
+  .rules b { color: var(--text); font-weight: 600; }
+  kbd {
+    background: rgba(255,255,255,.09); border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: 5px; padding: 0 5px; font: inherit; font-size: 12px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Разбор партии <span>- ход за ходом</span></h1>
+      <div class="sub" id="meta"></div>
+    </div>
+    <a class="backlink" href="/">К игре</a>
+  </header>
+
+  <div class="layout">
+    <div class="card">
+      <div class="scorebar" id="scorebar"></div>
+      <div class="boardbox"><svg class="board" viewBox="0 0 480 480" id="board"></svg></div>
+      <p class="hint" id="hint"></p>
+
+      <div class="scrub">
+        <div class="rail" id="rail">
+          <div class="fillbar" id="fillbar"></div>
+          <div class="knob" id="knob"></div>
+        </div>
+        <div class="controls">
+          <button class="primary" id="play">▶ Пуск</button>
+          <button id="first">⏮</button>
+          <button id="prev">◀</button>
+          <button id="next">▶</button>
+          <button id="last">⏭</button>
+          <div class="spacer"></div>
+          <div class="speed" id="speed">
+            <button data-ms="900">1x</button>
+            <button data-ms="450">2x</button>
+            <button data-ms="200">4x</button>
+          </div>
+          <span class="stepno" id="stepno"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h2>Ключевые моменты</h2>
+        <ul class="moments" id="moments"></ul>
+        <div class="legend">
+          <div><i class="sw a"></i> линии первого игрока</div>
+          <div><i class="sw b"></i> линии второго игрока</div>
+          <div><i class="sw l"></i> последний ход</div>
+          <div><i class="sw d"></i> квадрат, который придётся отдать</div>
+        </div>
+      </div>
+      <div class="card rules">
+        <b>Как читать разбор.</b> Ход, закрывший квадрат, даёт
+        <b>право ходить ещё раз</b> - это и есть продолжение. Красная рамка
+        означает, что игрок обязан отдать этот квадрат: у соперника уже
+        собрана цепочка из трёх сторон.<br><br>
+        <b>Управление.</b> <kbd>Пробел</kbd> - пуск и пауза,
+        <kbd>←</kbd> <kbd>→</kbd> - шаг, <kbd>Home</kbd> <kbd>End</kbd> - в начало и в конец.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DATA = {"recordedAt":"2026-10-01T05:30:52.749Z","server":"http://localhost:3000","game":{"ok":true,"room":"OJQ0BR","username":"rec6313772","frames":[{"phase":"starting","edges":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":40,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":0,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":39,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":1,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":38,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":2,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":37,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":3,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":36,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":4,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":35,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":5,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":34,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":6,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":33,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":7,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,-1,-1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":32,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":8,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,-1,-1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,-1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":31,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":9,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,-1,-1,-1,0,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,-1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1],"boxesLeft":16,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":30,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":0}],"result":null,"move":10,"gainedBoxes":[11],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,-1,-1,-1,0,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":15,"danger":[],"turnId":"__bot__","lastGainedBoxes":[11],"movesLeft":29,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":1}],"result":null,"move":11,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[-1,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,-1,-1,-1,0,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":15,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":28,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":1}],"result":null,"move":12,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,-1,-1,-1,0,-1,-1,1,-1,1,-1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":15,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":27,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":1}],"result":null,"move":13,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,-1,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":15,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":26,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":1}],"result":null,"move":14,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":15,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":25,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":1}],"result":null,"move":15,"gainedBoxes":[8],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":14,"danger":[],"turnId":"__bot__","lastGainedBoxes":[8],"movesLeft":24,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":2}],"result":null,"move":16,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,-1,1,-1,1,-1,-1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":14,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":23,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":2}],"result":null,"move":17,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,0,1,-1,1,-1,-1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":14,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":22,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":2}],"result":null,"move":18,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,-1,-1,-1,-1,-1,0,-1,-1,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,0,1,-1,1,-1,1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":14,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":21,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":2}],"result":null,"move":19,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,-1,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,0,1,-1,1,-1,1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":14,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":20,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":2}],"result":null,"move":20,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,-1,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,0,1,1,1,-1,1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":14,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":19,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":2}],"result":null,"move":21,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,0,0,0,-1,-1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,0,1,1,1,-1,1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,-1,1,-1,-1,-1,-1],"boxesLeft":14,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":18,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":2}],"result":null,"move":22,"gainedBoxes":[10],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,0,0,0,-1,1,0,-1,-1,1,-1,1,1,1,-1,-1,-1,1,0,1,1,1,-1,1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1],"boxesLeft":13,"danger":[],"turnId":"__bot__","lastGainedBoxes":[10],"movesLeft":17,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":3}],"result":null,"move":23,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,0,0,0,-1,1,0,-1,1,1,-1,1,1,1,-1,-1,-1,1,0,1,1,1,-1,1,-1,1,-1,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1],"boxesLeft":13,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":16,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":3}],"result":null,"move":24,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,0,0,0,-1,1,0,-1,1,1,-1,1,1,1,-1,-1,-1,1,0,1,1,1,-1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,-1,-1],"boxesLeft":13,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":15,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":3}],"result":null,"move":25,"gainedBoxes":[15],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,0,0,0,-1,1,0,-1,1,1,1,1,1,1,-1,-1,-1,1,0,1,1,1,-1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,-1,1],"boxesLeft":12,"danger":[],"turnId":"__bot__","lastGainedBoxes":[15],"movesLeft":14,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":4}],"result":null,"move":26,"gainedBoxes":[14],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,0,0,0,-1,1,0,-1,1,1,1,1,1,1,-1,-1,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,-1,1,1],"boxesLeft":11,"danger":[13],"turnId":"__bot__","lastGainedBoxes":[14],"movesLeft":13,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":5}],"result":null,"move":27,"gainedBoxes":[13],"dangerAtMove":[13],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,-1,0,0,0,1,1,0,-1,1,1,1,1,1,1,-1,-1,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,-1,1,1,-1,1,1,1],"boxesLeft":10,"danger":[9],"turnId":"__bot__","lastGainedBoxes":[13],"movesLeft":12,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":6}],"result":null,"move":28,"gainedBoxes":[9],"dangerAtMove":[9],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,1,0,0,0,1,1,0,-1,1,1,1,1,1,1,-1,-1,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,1,1,1,-1,1,1,1],"boxesLeft":9,"danger":[],"turnId":"__bot__","lastGainedBoxes":[9],"movesLeft":11,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":7}],"result":null,"move":29,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,-1,-1,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,1,1,1,-1,1,1,1],"boxesLeft":9,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":10,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":0},{"id":"__bot__","username":"Бот","slot":1,"score":7}],"result":null,"move":30,"gainedBoxes":[12],"dangerAtMove":[],"keptTurn":true,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,-1,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,1,1,1,0,1,1,1],"boxesLeft":8,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[12],"movesLeft":9,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":1},{"id":"__bot__","username":"Бот","slot":1,"score":7}],"result":null,"move":31,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,-1,-1,-1,-1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[-1,-1,-1,-1,-1,-1,-1,-1,1,1,1,1,0,1,1,1],"boxesLeft":8,"danger":[],"turnId":"__bot__","lastGainedBoxes":[],"movesLeft":8,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":1},{"id":"__bot__","username":"Бот","slot":1,"score":7}],"result":null,"move":32,"gainedBoxes":[0],"dangerAtMove":[],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,1,-1,-1,-1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[1,-1,-1,-1,-1,-1,-1,-1,1,1,1,1,0,1,1,1],"boxesLeft":7,"danger":[4],"turnId":"__bot__","lastGainedBoxes":[0],"movesLeft":7,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":1},{"id":"__bot__","username":"Бот","slot":1,"score":8}],"result":null,"move":33,"gainedBoxes":[1],"dangerAtMove":[4],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,1,1,-1,-1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,-1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[1,1,-1,-1,-1,-1,-1,-1,1,1,1,1,0,1,1,1],"boxesLeft":6,"danger":[4,5],"turnId":"__bot__","lastGainedBoxes":[1],"movesLeft":6,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":1},{"id":"__bot__","username":"Бот","slot":1,"score":9}],"result":null,"move":34,"gainedBoxes":[4,5],"dangerAtMove":[4,5],"keptTurn":false,"endedWith":"bot"},{"phase":"playing","edges":[0,0,-1,0,1,1,-1,-1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[1,1,-1,-1,1,1,-1,-1,1,1,1,1,0,1,1,1],"boxesLeft":4,"danger":[],"turnId":"__bot__","lastGainedBoxes":[4,5],"movesLeft":5,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":1},{"id":"__bot__","username":"Бот","slot":1,"score":11}],"result":null,"move":35,"gainedBoxes":[],"dangerAtMove":[],"keptTurn":false,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,0,1,1,-1,1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,1,1,0,1,1,1,1,1,-1,1,0,-1,1,1,0],"boxOwner":[1,1,-1,-1,1,1,-1,-1,1,1,1,1,0,1,1,1],"boxesLeft":4,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[],"movesLeft":4,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":1},{"id":"__bot__","username":"Бот","slot":1,"score":11}],"result":null,"move":36,"gainedBoxes":[7],"dangerAtMove":[],"keptTurn":true,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,0,1,1,-1,1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,1,1,0,1,1,1,1,1,0,1,0,-1,1,1,0],"boxOwner":[1,1,-1,-1,1,1,-1,0,1,1,1,1,0,1,1,1],"boxesLeft":3,"danger":[6],"turnId":"rec6313772","lastGainedBoxes":[7],"movesLeft":3,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":2},{"id":"__bot__","username":"Бот","slot":1,"score":11}],"result":null,"move":37,"gainedBoxes":[6],"dangerAtMove":[6],"keptTurn":true,"endedWith":"player"},{"phase":"playing","edges":[0,0,-1,0,1,1,0,1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,1,1,0,1,1,1,1,1,0,1,0,-1,1,1,0],"boxOwner":[1,1,-1,-1,1,1,0,0,1,1,1,1,0,1,1,1],"boxesLeft":2,"danger":[2],"turnId":"rec6313772","lastGainedBoxes":[6],"movesLeft":2,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":3},{"id":"__bot__","username":"Бот","slot":1,"score":11}],"result":null,"move":38,"gainedBoxes":[2],"dangerAtMove":[2],"keptTurn":true,"endedWith":"player"},{"phase":"playing","edges":[0,0,0,0,1,1,0,1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,1,1,0,1,1,1,1,1,0,1,0,-1,1,1,0],"boxOwner":[1,1,0,-1,1,1,0,0,1,1,1,1,0,1,1,1],"boxesLeft":1,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[2],"movesLeft":1,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":4},{"id":"__bot__","username":"Бот","slot":1,"score":11}],"result":null,"move":39},{"phase":"finished","edges":[0,0,0,0,1,1,0,1,0,1,0,0,0,1,1,0,1,1,1,1,1,1,1,0,0,1,1,0,1,1,1,1,1,0,1,0,0,1,1,0],"boxOwner":[1,1,0,0,1,1,0,0,1,1,1,1,0,1,1,1],"boxesLeft":0,"danger":[],"turnId":"rec6313772","lastGainedBoxes":[3],"movesLeft":0,"scores":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":5},{"id":"__bot__","username":"Бот","slot":1,"score":11}],"result":{"type":"finished","winnerId":"__bot__","reason":"score"},"move":40}],"summary":{"moves":41,"captures":14,"continuations":4,"dangerSeen":true,"score":[{"id":"rec6313772","username":"rec6313772","slot":0,"score":5},{"id":"__bot__","username":"Бот","slot":1,"score":11}],"result":{"type":"finished","winnerId":"__bot__","reason":"score"}}}};
+
+/* Геометрия поля. Числа обязаны совпадать с board.ts и с match.js на сервере:
+   пять точек по стороне, четыре промежутка, поле 480, шаг 100, отступ 40. */
+const SIZE = 480, STEP = 100, PAD = 40, SPAN = 4, H_COUNT = 20;
+const px = n => PAD + n * STEP;
+const hIndex = (r, c) => r * SPAN + c;
+const vIndex = (r, c) => H_COUNT + c * SPAN + r;
+const boxRC = b => ({ r: Math.floor(b / SPAN), c: b % SPAN });
+const isH = e => e < H_COUNT;
+function edgeEnds(e) {
+  if (isH(e)) { const r = Math.floor(e / SPAN), c = e % SPAN; return [px(c), px(r), px(c + 1), px(r)]; }
+  const v = e - H_COUNT, c = Math.floor(v / SPAN), r = v % SPAN;
+  return [px(c), px(r), px(c), px(r + 1)];
+}
+
+const frames = DATA.game.frames;
+const last = frames[frames.length - 1];
+const players = last.scores;
+const A = players[0], B = players[1];
+const NS = 'http://www.w3.org/2000/svg';
+const el = id => document.getElementById(id);
+
+/* Кто ходил этим ходом. Если право ходить осталось за ним, значит ходящий -
+   тот, чей теперь turnId. Иначе ход перешёл, и ходил соперник. */
+function moverOf(f) {
+  const next = f.turnId === A.id ? A : B;
+  const other = f.turnId === A.id ? B : A;
+  return f.keptTurn ? next : other;
+}
+
+/* Моменты для списка и меток на ленте.
+   Взятие и цепочка почти всегда совпадают: цепочка и появляется-то потому,
+   что игрок только что собрал три стороны вокруг квадрата. Разбирать их
+   по отдельности бессмысленно - в таком ходе игрок забирает квадрат и
+   одновременно понимает, что следующим ходом обязан отдать его же. */
+const moments = [];
+frames.forEach((f, i) => {
+  if (i === 0) return;
+  const gain = (f.gainedBoxes || []).length;
+  const danger = (f.danger || []).length;
+  if (!gain && !danger) return;
+  moments.push({
+    at: i,
+    kind: gain && danger ? 'both' : (gain ? 'gain' : 'danger'),
+    who: moverOf(f),
+    gain, danger,
+    kept: !!f.keptTurn
+  });
+});
+
+let cur = 0, timer = null, speed = 900;
+
+/* ---------------- поле ---------------- */
+function buildBoard() {
+  const svg = el('board');
+  const gGrid = document.createElementNS(NS, 'g');
+  const gFill = document.createElementNS(NS, 'g');
+  const gDanger = document.createElementNS(NS, 'g');
+  const gLines = document.createElementNS(NS, 'g');
+  const gDots = document.createElementNS(NS, 'g');
+
+  for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++) {
+    const dot = document.createElementNS(NS, 'circle');
+    dot.setAttribute('cx', px(c)); dot.setAttribute('cy', px(r)); dot.setAttribute('r', 3.4);
+    dot.setAttribute('class', 'dot');
+    gDots.appendChild(dot);
+  }
+  svg.append(gFill, gDanger, gLines, gGrid, gDots);
+}
+
+function clearNode(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+
+function draw() {
+  const f = frames[cur];
+  const gain = cur > 0 ? (f.gainedBoxes || []).length : 0;
+  const danger = cur > 0 ? (f.danger || []).length : 0;
+  const svg = el('board');
+  const [gFill, gDanger, gLines] = svg.children;
+
+  clearNode(gFill); clearNode(gDanger); clearNode(gLines);
+
+  /* Самая свежая закрытая линия: та, которой раньше не было */
+  let latest = -1;
+  if (cur > 0) {
+    const prev = frames[cur - 1];
+    for (let e = 0; e < 40; e++) if (prev.edges[e] === -1 && f.edges[e] !== -1) { latest = e; break; }
+  }
+
+  f.boxOwner.forEach((owner, b) => {
+    if (owner === -1) return;
+    const { r, c } = boxRC(b);
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', px(c) + 4); rect.setAttribute('y', px(r) + 4);
+    rect.setAttribute('width', STEP - 8); rect.setAttribute('height', STEP - 8);
+    rect.setAttribute('rx', 6);
+    rect.setAttribute('class', 'bfill s' + owner);
+    if (cur > 0 && f.gainedBoxes && f.gainedBoxes.includes(b)) {
+      rect.style.transformOrigin = (px(c) + STEP / 2) + 'px ' + (px(r) + STEP / 2) + 'px';
+    }
+    gFill.appendChild(rect);
+  });
+
+  (f.danger || []).forEach(b => {
+    const { r, c } = boxRC(b);
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', px(c) + 8); rect.setAttribute('y', px(r) + 8);
+    rect.setAttribute('width', STEP - 16); rect.setAttribute('height', STEP - 16);
+    rect.setAttribute('rx', 4);
+    rect.setAttribute('class', 'danger');
+    gDanger.appendChild(rect);
+  });
+
+  f.edges.forEach((slot, e) => {
+    if (slot === -1) return;
+    const [x1, y1, x2, y2] = edgeEnds(e);
+    const ln = document.createElementNS(NS, 'line');
+    ln.setAttribute('x1', x1); ln.setAttribute('y1', y1);
+    ln.setAttribute('x2', x2); ln.setAttribute('y2', y2);
+    ln.setAttribute('class', 'line s' + slot + (e === latest ? ' latest' : ''));
+    gLines.appendChild(ln);
+  });
+
+  /* табло */
+  const sa = f.scores.find(s => s.id === A.id).score;
+  const sb = f.scores.find(s => s.id === B.id).score;
+  const tot = Math.max(1, sa + sb);
+  el('scorebar').innerHTML =
+    col(A, sa, tot) +
+    '<span class="vs">разыграно ' + (sa + sb) + ' из 16</span>' +
+    col(B, sb, tot);
+
+  /* лента */
+  const pct = frames.length > 1 ? (cur / (frames.length - 1)) * 100 : 0;
+  el('fillbar').style.width = pct + '%';
+  el('knob').style.left = pct + '%';
+  el('stepno').textContent = 'ход ' + cur + ' из ' + (frames.length - 1);
+
+  /* пояснение под полем */
+  const h = el('hint');
+  const who = f.turnId === A.id ? A : B;
+  if (cur === 0) {
+    h.innerHTML = 'Поле разметилось. Первым ходит <b>' +
+      esc(frames[0].turnId === A.id ? A.username : B.username) + '</b>.';
+  } else if (gain && danger) {
+    const m = moverOf(f);
+    h.innerHTML = '<b>' + esc(m.username) + '</b> взял(а) ' + plural(gain) +
+      ' и ходит дальше &mdash; но <span class="warn">этот же квадрат придётся отдать</span>. ' +
+      'Классическая ловушка цепочки: сейчас выгодно, потом дорого.';
+  } else if (gain) {
+    const m = moverOf(f);
+    h.innerHTML = '<b>' + esc(m.username) + '</b> забрал(а) ' + plural(gain) +
+      (f.keptTurn
+        ? ' и ходит дальше &mdash; <b>продолжение</b>.'
+        : ', ход переходит сопернику.');
+  } else if (danger) {
+    h.innerHTML = '<span class="warn">Осторожно:</span> <b>' + esc(who.username) +
+      '</b> придётся отдать ' + plural(danger) + '. Красная рамка.';
+  } else {
+    h.innerHTML = 'Ходит <b>' + esc(who.username) + '</b>. Осталось линий: ' + f.movesLeft + '.';
+  }
+
+  /* подсветка активного момента */
+  [...el('moments').children].forEach((li, i) => {
+    li.classList.toggle('on', moments[i] && moments[i].at === cur);
+  });
+}
+
+function col(p, score, tot, id) {
+  const w = (score / tot) * 100;
+  return '<div class="side-score">' +
+    '<div class="who"><span class="nm">' + esc(p.username) + '</span>' +
+    (p.username === '__bot__' ? '<span class="tag">бот</span>' : '') +
+    '<span class="pts">' + score + '</span></div>' +
+    '<div class="track"><div class="fill ' + (p.slot === 0 ? 'a' : 'b') +
+    '" style="width:' + w + '%"></div></div></div>';
+}
+const plural = n => n === 1 ? 'квадрат' : (n < 5 ? 'квадрата' : 'квадратов');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/* ---------------- список моментов и метки ---------------- */
+function buildMoments() {
+  const ul = el('moments');
+  if (!moments.length) { ul.innerHTML = '<li class="empty">Ни взятий, ни цепочек не было.</li>'; return; }
+  moments.forEach(m => {
+    const li = document.createElement('li');
+    let ico, txt;
+    if (m.kind === 'both') {
+      ico = '🎯⚠️';
+      txt = '<b>' + esc(m.who.username) + '</b> взял(а) ' + plural(m.gain) +
+        ', но обязан отдать' + (m.kept ? ' &mdash; ход остаётся за ним' : ' следующим ходом');
+    } else if (m.kind === 'gain') {
+      ico = '🎯';
+      txt = '<b>' + esc(m.who.username) + '</b> взял(а) ' + plural(m.gain) +
+        (m.kept ? ' и ходит дальше' : '');
+    } else {
+      ico = '⚠️';
+      txt = '<b>' + esc(m.who.username) + '</b> отдаёт ' + plural(m.danger);
+    }
+    li.innerHTML = '<span class="ico">' + ico + '</span><span class="txt">' + txt + '</span>';
+    const mo = document.createElement('div');
+    mo.className = 'mo';
+    mo.textContent = 'ход ' + m.at;
+    li.appendChild(mo);
+    li.onclick = () => { pause(); go(m.at); };
+    ul.appendChild(li);
+
+    const mark = document.createElement('div');
+    mark.className = 'mark ' + (m.kind === 'danger' ? 'danger' : 'gain');
+    if (m.kind === 'both') mark.classList.add('chain');
+    mark.style.left = ((m.at / (frames.length - 1)) * 100) + '%';
+    mark.title = 'ход ' + m.at;
+    mark.onclick = ev => { ev.stopPropagation(); pause(); go(m.at); };
+    el('rail').appendChild(mark);
+  });
+}
+
+/* ---------------- управление ---------------- */
+function go(i) {
+  cur = Math.max(0, Math.min(frames.length - 1, i));
+  draw();
+}
+function pause() {
+  if (timer) { clearInterval(timer); timer = null; }
+  el('play').textContent = '▶ Пуск';
+}
+function play() {
+  if (timer) { pause(); return; }
+  el('play').textContent = '❚❚ Пауза';
+  if (cur >= frames.length - 1) go(0);
+  timer = setInterval(() => {
+    if (cur >= frames.length - 1) { pause(); return; }
+    go(cur + 1);
+  }, speed);
+}
+
+el('play').onclick = play;
+el('first').onclick = () => { pause(); go(0); };
+el('last').onclick = () => { pause(); go(frames.length - 1); };
+el('prev').onclick = () => { pause(); go(cur - 1); };
+el('next').onclick = () => { pause(); go(cur + 1); };
+el('speed').onclick = ev => {
+  const b = ev.target.closest('button');
+  if (!b) return;
+  speed = Number(b.dataset.ms);
+  [...el('speed').children].forEach(x => x.classList.toggle('on', x === b));
+  if (timer) { pause(); play(); }
+};
+el('rail').onclick = ev => {
+  if (ev.target.classList.contains('mark')) return;
+  pause();
+  const r = el('rail').getBoundingClientRect();
+  go(Math.round(((ev.clientX - r.left) / r.width) * (frames.length - 1)));
+};
+document.addEventListener('keydown', ev => {
+  if (ev.code === 'Space') { ev.preventDefault(); play(); }
+  else if (ev.code === 'ArrowRight') { pause(); go(cur + 1); }
+  else if (ev.code === 'ArrowLeft') { pause(); go(cur - 1); }
+  else if (ev.code === 'Home') { pause(); go(0); }
+  else if (ev.code === 'End') { pause(); go(frames.length - 1); }
+});
+
+/* ---------------- запуск ---------------- */
+buildBoard();
+buildMoments();
+el('speed').children[0].classList.add('on');
+el('meta').textContent =
+  'записано ' + new Date(DATA.recordedAt).toLocaleString('ru-RU') +
+  ' · ходов ' + (frames.length - 1) +
+  ' · взятий ' + moments.reduce((s, m) => s + m.gain, 0) +
+  ' · цепочек ' + moments.filter(m => m.danger > 0).length;
+draw();
+</script>
+</body>
+</html>
