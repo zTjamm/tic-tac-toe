@@ -55,6 +55,15 @@
        помещаться в окно целиком, а в меню прокручивается свободно */
     --page-pad: 20px;
 
+    /* Вырезы и полосы жестов телефонов. Читаем их в переменные, потому что
+       отступы body и высота игрового экрана должны считаться от одного и
+       того же - иначе припартия страница начнёт прокручиваться по вертикали.
+       На экранах без вырезов все четыре равны нулю. */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+
     /* Разделитель блоков. В светлой теме панель, список и чат одного цвета,
        и без линии между ними не видно, где кончается одно и начинается
        другое. Тёмная, а не --border-color: та слишком светлая и на белом
@@ -68,6 +77,15 @@ body {
     background: var(--bg-gradient);
     min-height: 100vh;
     padding: var(--page-pad);
+    /* Безопасные зоны. В разметке стоит viewport-fit=cover, то есть браузер
+       разрешает рисовать под чёлку и под домашнюю полосу, а без этих
+       отступов шапка уходила под вырез, а нижние кнопки - под полосу: на
+       части телефонов до них было не дотянуться. На обычных экранах все
+       четыре значения равны нулю и ничего не меняется. */
+    padding-top: calc(var(--page-pad) + var(--safe-top));
+    padding-right: calc(var(--page-pad) + var(--safe-right));
+    padding-bottom: calc(var(--page-pad) + var(--safe-bottom));
+    padding-left: calc(var(--page-pad) + var(--safe-left));
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -144,8 +162,8 @@ html {
     grid-template-rows: auto minmax(0, 1fr);
     column-gap: 20px;
     row-gap: 16px;
-    height: calc(100vh - var(--page-pad) * 2);
-    height: calc(100dvh - var(--page-pad) * 2);
+    height: calc(100vh - var(--page-pad) * 2 - var(--safe-top) - var(--safe-bottom));
+    height: calc(100dvh - var(--page-pad) * 2 - var(--safe-top) - var(--safe-bottom));
     overflow: hidden;
     flex: 0 0 auto;
 }
@@ -221,6 +239,71 @@ html {
     gap: 8px;
     flex-wrap: wrap;
     justify-content: flex-end;
+}
+
+/* Шапка в три колонки держится только на широких экранах.
+   Заголовок не переносится и занимает почти 200 пикселей, а кнопкам
+   нужны все 388 (шесть по 58 и промежутки). В колонке 1fr остаётся ровно
+   столько, сколько нужно, - а на 600..1000 пикселей не хватало, и кнопки
+   вставали в два-три ряда, а на телефоне вообще столбиком: шапка занимала
+   372 пикселя, 45% экрана, и поле уезжало вниз.
+
+   Поэтому до 1100 пикселей шапка в две строки: ник с заголовком сверху
+   (заголовок остаётся по центру - крайние колонки одинаковые), все кнопки
+   одним рядом под ними. Один ряд в один ряд помещается только с 1100. */
+@media (max-width: 1100px) {
+    .top-bar {
+        grid-template-areas:
+            "user title ."
+            "acts acts acts";
+        gap: 10px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+    }
+
+    .top-bar-user {
+        grid-area: user;
+        max-width: 38%;
+    }
+
+    .top-bar-title {
+        grid-area: title;
+        font-size: 0.98em;
+    }
+
+    .top-bar-actions {
+        grid-area: acts;
+        flex-wrap: nowrap;
+        justify-content: center;
+        gap: 8px;
+    }
+}
+
+/* На телефоне ник ужимается до пары букв: колонка 1fr делится с пустой
+   третьей, и на него остаётся меньше, чем нужно. Он и так есть в табло и
+   в списке онлайн, поэтому здесь просто убираем. */
+@media (max-width: 560px) {
+    .top-bar {
+        grid-template-areas:
+            "title title title"
+            "acts acts acts";
+    }
+
+    .top-bar-user {
+        display: none;
+    }
+
+    .top-bar-actions {
+        gap: 6px;
+    }
+}
+
+/* Уже не помещаются подписи - оставляем иконки.
+   Подрезать «Правила» до «Прав…» хуже, чем показать только значок. */
+@media (max-width: 400px) {
+    .btn-square .cap {
+        display: none;
+    }
 }
 
 /* Квадратная кнопка: иконка сверху, короткая подпись снизу.
@@ -514,8 +597,8 @@ h1 {
 .panel-toggle {
     display: none;
     position: fixed;
-    right: 14px;
-    bottom: 14px;
+    right: calc(14px + var(--safe-right));
+    bottom: calc(14px + var(--safe-bottom));
     width: 52px;
     height: 52px;
     border: none;
